@@ -13,7 +13,7 @@ class RGB_HVI(nn.Module):
         self.alpha_s = 1.3
         self.this_k = 0
         
-    def HVIT(self, img):
+    def RGB_to_HVI(self, img):
         eps = 1e-8
         device = img.device
         dtypes = img.dtype
@@ -46,7 +46,7 @@ class RGB_HVI(nn.Module):
         xyz = torch.cat([H, V, I],dim=1)
         return xyz
     
-    def PHVIT(self, img):
+    def HVI_to_RGB(self, img):
         eps = 1e-8
         H,V,I = img[:,0,:,:],img[:,1,:,:],img[:,2,:,:]
         

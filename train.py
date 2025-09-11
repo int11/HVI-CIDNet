@@ -7,7 +7,7 @@ import torch.backends.cudnn as cudnn
 import numpy as np
 from torch.utils.data import DataLoader
 from net.CIDNet import CIDNet
-from data.options import option
+from data.options import option, load_datasets
 from measure import metrics
 from eval import eval
 from data.data import *
@@ -15,8 +15,9 @@ from loss.losses import *
 from data.scheduler import *
 from tqdm import tqdm
 from datetime import datetime
+import glob
 
-opt = option().parse_args()
+from DCNv4 import functions
 
 def seed_torch():
     seed = random.randint(1, 1000000)
@@ -57,8 +58,8 @@ def train(epoch):
             output_rgb = model(im1)  
             
         gt_rgb = im2
-        output_hvi = model.HVIT(output_rgb)
-        gt_hvi = model.HVIT(gt_rgb)
+        output_hvi = model.RGB_to_HVI(output_rgb)
+        gt_hvi = model.RGB_to_HVI(gt_rgb)
         loss_hvi = L1_loss(output_hvi, gt_hvi) + D_loss(output_hvi, gt_hvi) + E_loss(output_hvi, gt_hvi) + opt.P_weight * P_loss(output_hvi, gt_hvi)[0]
         loss_rgb = L1_loss(output_rgb, gt_rgb) + D_loss(output_rgb, gt_rgb) + E_loss(output_rgb, gt_rgb) + opt.P_weight * P_loss(output_rgb, gt_rgb)[0]
         loss = loss_rgb + opt.HVI_weight * loss_hvi
@@ -99,53 +100,6 @@ def checkpoint(epoch):
     print("Checkpoint saved to {}".format(model_out_path))
     return model_out_path
     
-def load_datasets():
-    print('===> Loading datasets')
-    if opt.lol_v1 or opt.lol_blur or opt.lolv2_real or opt.lolv2_syn or opt.SID or opt.SICE_mix or opt.SICE_grad:
-        if opt.lol_v1:
-            train_set = get_lol_training_set(opt.data_train_lol_v1,size=opt.cropSize)
-            training_data_loader = DataLoader(dataset=train_set, num_workers=opt.threads, batch_size=opt.batchSize, shuffle=opt.shuffle)
-            test_set = get_eval_set(opt.data_val_lol_v1)
-            testing_data_loader = DataLoader(dataset=test_set, num_workers=opt.threads, batch_size=1, shuffle=False)
-            
-        if opt.lol_blur:
-            train_set = get_training_set_blur(opt.data_train_lol_blur,size=opt.cropSize)
-            training_data_loader = DataLoader(dataset=train_set, num_workers=opt.threads, batch_size=opt.batchSize, shuffle=opt.shuffle)
-            test_set = get_eval_set(opt.data_val_lol_blur)
-            testing_data_loader = DataLoader(dataset=test_set, num_workers=opt.threads, batch_size=1, shuffle=False)
-
-        if opt.lolv2_real:
-            train_set = get_lol_v2_training_set(opt.data_train_lolv2_real,size=opt.cropSize)
-            training_data_loader = DataLoader(dataset=train_set, num_workers=opt.threads, batch_size=opt.batchSize, shuffle=opt.shuffle)
-            test_set = get_eval_set(opt.data_val_lolv2_real)
-            testing_data_loader = DataLoader(dataset=test_set, num_workers=opt.threads, batch_size=1, shuffle=False)
-            
-        if opt.lolv2_syn:
-            train_set = get_lol_v2_syn_training_set(opt.data_train_lolv2_syn,size=opt.cropSize)
-            training_data_loader = DataLoader(dataset=train_set, num_workers=opt.threads, batch_size=opt.batchSize, shuffle=opt.shuffle)
-            test_set = get_eval_set(opt.data_val_lolv2_syn)
-            testing_data_loader = DataLoader(dataset=test_set, num_workers=opt.threads, batch_size=1, shuffle=False)
-        
-        if opt.SID:
-            train_set = get_SID_training_set(opt.data_train_SID,size=opt.cropSize)
-            training_data_loader = DataLoader(dataset=train_set, num_workers=opt.threads, batch_size=opt.batchSize, shuffle=opt.shuffle)
-            test_set = get_eval_set(opt.data_val_SID)
-            testing_data_loader = DataLoader(dataset=test_set, num_workers=opt.threads, batch_size=1, shuffle=False)
-            
-        if opt.SICE_mix:
-            train_set = get_SICE_training_set(opt.data_train_SICE,size=opt.cropSize)
-            training_data_loader = DataLoader(dataset=train_set, num_workers=opt.threads, batch_size=opt.batchSize, shuffle=opt.shuffle)
-            test_set = get_SICE_eval_set(opt.data_val_SICE_mix)
-            testing_data_loader = DataLoader(dataset=test_set, num_workers=opt.threads, batch_size=1, shuffle=False)
-            
-        if opt.SICE_grad:
-            train_set = get_SICE_training_set(opt.data_train_SICE,size=opt.cropSize)
-            training_data_loader = DataLoader(dataset=train_set, num_workers=opt.threads, batch_size=opt.batchSize, shuffle=opt.shuffle)
-            test_set = get_SICE_eval_set(opt.data_val_SICE_grad)
-            testing_data_loader = DataLoader(dataset=test_set, num_workers=opt.threads, batch_size=1, shuffle=False)
-    else:
-        raise Exception("should choose a dataset")
-    return training_data_loader, testing_data_loader
 
 def build_model():
     print('===> Building model ')
@@ -174,10 +128,10 @@ def make_scheduler():
     return optimizer,scheduler
 
 def init_loss():
-    L1_weight   = opt.L1_weight
-    D_weight    = opt.D_weight 
-    E_weight    = opt.E_weight 
-    P_weight    = 1.0
+    L1_weight = opt.L1_weight
+    D_weight = opt.D_weight 
+    E_weight = opt.E_weight 
+    P_weight = 1.0
     
     L1_loss= L1Loss(loss_weight=L1_weight, reduction='mean').cuda()
     D_loss = SSIM(weight=D_weight).cuda()
@@ -186,19 +140,15 @@ def init_loss():
     return L1_loss,P_loss,E_loss,D_loss
 
 if __name__ == '__main__':  
-    
-    '''
-    preparision
-    '''
+    # preparision
+    opt = option().parse_args()
     train_init()
-    training_data_loader, testing_data_loader = load_datasets()
+    training_data_loader, testing_data_loader = load_datasets(opt)
     model = build_model()
     optimizer,scheduler = make_scheduler()
     L1_loss,P_loss,E_loss,D_loss = init_loss()
     
-    '''
-    train
-    '''
+    # train
     psnr = []
     ssim = []
     lpips = []
@@ -207,49 +157,14 @@ if __name__ == '__main__':
         start_epoch = opt.start_epoch
     if not os.path.exists(opt.val_folder):          
         os.mkdir(opt.val_folder) 
-        
+
     for epoch in range(start_epoch+1, opt.nEpochs + start_epoch + 1):
         epoch_loss, pic_num = train(epoch)
         scheduler.step()
-        
         if epoch % opt.snapshots == 0:
-            model_out_path = checkpoint(epoch) 
-            norm_size = True
-
-            # LOL three subsets
-            if opt.lol_v1:
-                output_folder = 'LOLv1/'
-                label_dir = opt.data_valgt_lol_v1
-            if opt.lolv2_real:
-                output_folder = 'LOLv2_real/'
-                label_dir = opt.data_valgt_lolv2_real
-            if opt.lolv2_syn:
-                output_folder = 'LOLv2_syn/'
-                label_dir = opt.data_valgt_lolv2_syn
-            
-            # LOL-blur dataset with low_blur and high_sharp_scaled
-            if opt.lol_blur:
-                output_folder = 'LOL_blur/'
-                label_dir = opt.data_valgt_lol_blur
-                
-            if opt.SID:
-                output_folder = 'SID/'
-                label_dir = opt.data_valgt_SID
-                npy = True
-            if opt.SICE_mix:
-                output_folder = 'SICE_mix/'
-                label_dir = opt.data_valgt_SICE_mix
-                norm_size = False
-            if opt.SICE_grad:
-                output_folder = 'SICE_grad/'
-                label_dir = opt.data_valgt_SICE_grad
-                norm_size = False
-
-            im_dir = opt.val_folder + output_folder + '*.png'
-            eval(model, testing_data_loader, model_out_path, opt.val_folder+output_folder, 
-                 norm_size=norm_size, LOL=opt.lol_v1, v2=opt.lolv2_real, alpha=0.8)
-            
-            avg_psnr, avg_ssim, avg_lpips = metrics(im_dir, label_dir, use_GT_mean=False)
+            model_out_path = checkpoint(epoch)
+            avg_psnr, avg_ssim, avg_lpips = eval(model, testing_data_loader, model_out_path, 
+                 opt, alpha=0.8, use_GT_mean=opt.use_GT_mean)
             print("===> Avg.PSNR: {:.4f} dB ".format(avg_psnr))
             print("===> Avg.SSIM: {:.4f} ".format(avg_ssim))
             print("===> Avg.LPIPS: {:.4f} ".format(avg_lpips))
@@ -263,7 +178,7 @@ if __name__ == '__main__':
     
     now = datetime.now().strftime("%Y-%m-%d-%H%M%S")
     with open(f"./results/training/metrics{now}.md", "w") as f:
-        f.write("dataset: "+ output_folder + "\n")  
+        f.write("dataset: "+ opt.dataset + "\n")  
         f.write(f"lr: {opt.lr}\n")  
         f.write(f"batch size: {opt.batchSize}\n")  
         f.write(f"crop size: {opt.cropSize}\n")  
@@ -275,5 +190,4 @@ if __name__ == '__main__':
         f.write("| Epochs | PSNR | SSIM | LPIPS |\n")  
         f.write("|----------------------|----------------------|----------------------|----------------------|\n")  
         for i in range(len(psnr)):
-            f.write(f"| {opt.start_epoch+(i+1)*opt.snapshots} | { psnr[i]:.4f} | {ssim[i]:.4f} | {lpips[i]:.4f} |\n")  
-        
+            f.write(f"| {opt.start_epoch+(i+1)*opt.snapshots} | { psnr[i]:.4f} | {ssim[i]:.4f} | {lpips[i]:.4f} |\n")

@@ -1,7 +1,6 @@
 import os
 os.environ['CUDA_VISIBLE_DEVICES'] = "0"
 import torch
-import glob
 import cv2
 import lpips
 import numpy as np
@@ -9,15 +8,8 @@ from PIL import Image
 from tqdm import tqdm
 import argparse
 import platform
+import glob
 
-mea_parser = argparse.ArgumentParser(description='Measure')
-mea_parser.add_argument('--use_GT_mean', action='store_true', help='Use the mean of GT to rectify the output of the model')
-mea_parser.add_argument('--lol', action='store_true', help='measure lolv1 dataset')
-mea_parser.add_argument('--lol_v2_real', action='store_true', help='measure lol_v2_real dataset')
-mea_parser.add_argument('--lol_v2_syn', action='store_true', help='measure lol_v2_syn dataset')
-mea_parser.add_argument('--SICE_grad', action='store_true', help='measure SICE_grad dataset')
-mea_parser.add_argument('--SICE_mix', action='store_true', help='measure SICE_mix dataset')
-mea = mea_parser.parse_args()
 
 def ssim(prediction, target):
     C1 = (0.01 * 255)**2
@@ -69,27 +61,31 @@ def calculate_psnr(target, ref):
     psnr = 10.0 * np.log10(255.0 * 255.0 / (np.mean(np.square(diff)) + 1e-8))
     return psnr
 
-def metrics(im_dir, label_dir, use_GT_mean):
+def metrics(im_list, label_list, use_GT_mean):
     avg_psnr = 0
     avg_ssim = 0
     avg_lpips = 0
     n = 0
     loss_fn = lpips.LPIPS(net='alex')
     loss_fn.cuda()
-    for item in tqdm(sorted(glob.glob(im_dir))):
+    for item, label_item in tqdm(list(zip(im_list, label_list))):
         n += 1
         
-        im1 = Image.open(item).convert('RGB') 
-        
-        os_name = platform.system()
-        if os_name.lower() == 'windows':
-            name = item.split('\\')[-1]
-        elif os_name.lower() == 'linux':
-            name = item.split('/')[-1]
-        else:
-            name = item.split('/')[-1]
+        # Handle different input types (PIL, numpy array, or file path)
+        if isinstance(item, str):
+            im1 = Image.open(item).convert('RGB')
+        elif isinstance(item, Image.Image):
+            im1 = item.convert('RGB')
+        else:  # numpy array
+            im1 = Image.fromarray((item * 255).astype(np.uint8))
             
-        im2 = Image.open(label_dir + name).convert('RGB')
+        if isinstance(label_item, str):
+            im2 = Image.open(label_item).convert('RGB')
+        elif isinstance(label_item, Image.Image):
+            im2 = label_item.convert('RGB')
+        else:  # numpy array
+            im2 = Image.fromarray((label_item * 255).astype(np.uint8))
+            
         (h, w) = im2.size
         im1 = im1.resize((h, w))  
         im1 = np.array(im1) 
@@ -121,24 +117,32 @@ def metrics(im_dir, label_dir, use_GT_mean):
 
 
 if __name__ == '__main__':
-    
-    if mea.lol:
-        im_dir = './output/LOLv1/*.png'
-        label_dir = './datasets/LOLdataset/eval15/high/'
-    if mea.lol_v2_real:
-        im_dir = './output/LOLv2_real/*.png'
-        label_dir = './datasets/LOLv2/Real_captured/Test/Normal/'
-    if mea.lol_v2_syn:
-        im_dir = './output/LOLv2_syn/*.png'
-        label_dir = './datasets/LOLv2/Synthetic/Test/Normal/'
-    if mea.SICE_grad:
-        im_dir = './output/SICE_grad/*.png'
-        label_dir = './datasets/SICE/SICE_Reshape/'
-    if mea.SICE_mix:
-        im_dir = './output/SICE_mix/*.png'
-        label_dir = './datasets/SICE/SICE_Reshape/'
+    mea_parser = argparse.ArgumentParser(description='Measure')
+    mea_parser.add_argument('--use_GT_mean', action='store_true', default=True, help='Use the mean of GT to rectify the output of the model')
+    mea_parser.add_argument('--lol', action='store_true', default=True, help='measure lolv1 dataset')
+    mea_parser.add_argument('--lol_v2_real', action='store_true', help='measure lol_v2_real dataset')
+    mea_parser.add_argument('--lol_v2_syn', action='store_true', help='measure lol_v2_syn dataset')
+    mea_parser.add_argument('--SICE_grad', action='store_true', help='measure SICE_grad dataset')
+    mea_parser.add_argument('--SICE_mix', action='store_true', help='measure SICE_mix dataset')
+    mea = mea_parser.parse_args()
 
-    avg_psnr, avg_ssim, avg_lpips = metrics(im_dir, label_dir, mea.use_GT_mean)
+    if mea.lol:
+        im_list = sorted(glob.glob('./output/LOLv1/*.png'))
+        label_list = sorted([os.path.join('./datasets/LOLdataset/eval15/high/', os.path.basename(x)) for x in im_list])
+    if mea.lol_v2_real:
+        im_list = sorted(glob.glob('./output/LOLv2_real/*.png'))
+        label_list = sorted([os.path.join('./datasets/LOLv2/Real_captured/Test/Normal/', os.path.basename(x)) for x in im_list])
+    if mea.lol_v2_syn:
+        im_list = sorted(glob.glob('./output/LOLv2_syn/*.png'))
+        label_list = sorted([os.path.join('./datasets/LOLv2/Synthetic/Test/Normal/', os.path.basename(x)) for x in im_list])
+    if mea.SICE_grad:
+        im_list = sorted(glob.glob('./output/SICE_grad/*.png'))
+        label_list = sorted([os.path.join('./datasets/SICE/SICE_Reshape/', os.path.basename(x)) for x in im_list])
+    if mea.SICE_mix:
+        im_list = sorted(glob.glob('./output/SICE_mix/*.png'))
+        label_list = sorted([os.path.join('./datasets/SICE/SICE_Reshape/', os.path.basename(x)) for x in im_list])
+
+    avg_psnr, avg_ssim, avg_lpips = metrics(im_list, label_list, mea.use_GT_mean)
     print("===> Avg.PSNR: {:.4f} dB ".format(avg_psnr))
     print("===> Avg.SSIM: {:.4f} ".format(avg_ssim))
     print("===> Avg.LPIPS: {:.4f} ".format(avg_lpips))
