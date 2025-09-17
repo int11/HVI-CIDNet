@@ -7,10 +7,6 @@ class RGB_HVI(nn.Module):
     def __init__(self):
         super(RGB_HVI, self).__init__()
         self.density_k = torch.nn.Parameter(torch.full([1],0.2)) # k is reciprocal to the paper mentioned
-        self.gated = False
-        self.gated2= False
-        self.alpha_s = 1.3
-        self.alpha_i = 1.0
         self.this_k = 0
         
     def RGB_to_HVI(self, img):
@@ -45,8 +41,8 @@ class RGB_HVI(nn.Module):
         I = value
         xyz = torch.cat([H, V, I],dim=1)
         return xyz
-    
-    def HVI_to_RGB(self, img):
+
+    def HVI_to_RGB(self, img, alpha_s=1.3, alpha_i=1.0):
         eps = 1e-8
         H,V,I = img[:,0,:,:],img[:,1,:,:],img[:,2,:,:]
         
@@ -65,10 +61,9 @@ class RGB_HVI(nn.Module):
         h = torch.atan2(V + eps,H + eps) / (2*pi)
         h = h%1
         s = torch.sqrt(H**2 + V**2 + eps)
-        
-        if self.gated:
-            s = s * self.alpha_s
-        
+
+        s = s * alpha_s
+
         s = torch.clamp(s,0,1)
         v = torch.clamp(v,0,1)
         
@@ -117,6 +112,6 @@ class RGB_HVI(nn.Module):
         g = g.unsqueeze(1)
         b = b.unsqueeze(1)
         rgb = torch.cat([r, g, b], dim=1)
-        if self.gated2:
-            rgb = rgb * self.alpha_i
+
+        rgb = rgb * alpha_i
         return rgb

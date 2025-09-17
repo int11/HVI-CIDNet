@@ -20,6 +20,9 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.exceptions import ConvergenceWarning
 
 from scipy.stats import norm
+import matplotlib
+# matplotlib.use('Agg')  # GUI 없는 환경에서 사용 - 주석 처리하여 GUI 활성화
+import matplotlib.pyplot as plt
 
 import safetensors.torch as sf
 from huggingface_hub import hf_hub_download
@@ -108,7 +111,7 @@ def metrics_one(im1, im2, use_GT_mean, loss_fn):
     return score_psnr, score_ssim, score_lpips
 
 
-def process_image_with_cidnet(model, image, alpha, alpha_s):
+def process_image_with_cidnet(model, image, alpha_s, alpha_i):
     input_tensor = transforms.ToTensor()(image)
     # Convert parameters to tensor
     if isinstance(alpha_s, np.ndarray):
@@ -116,10 +119,10 @@ def process_image_with_cidnet(model, image, alpha, alpha_s):
     else:
         alpha_s = torch.tensor(alpha_s, dtype=input_tensor.dtype, device=device)
     
-    if isinstance(alpha, np.ndarray):
-        alpha = torch.from_numpy(alpha).to(device).to(input_tensor.dtype)
+    if isinstance(alpha_i, np.ndarray):
+        alpha_i = torch.from_numpy(alpha_i).to(device).to(input_tensor.dtype)
     else:
-        alpha = torch.tensor(alpha, dtype=input_tensor.dtype, device=device)
+        alpha_i = torch.tensor(alpha_i, dtype=input_tensor.dtype, device=device)
         
     factor = 8
     h, w = input_tensor.shape[1], input_tensor.shape[2]
@@ -133,7 +136,7 @@ def process_image_with_cidnet(model, image, alpha, alpha_s):
         model.trans.gated = True
         model.trans.alpha_s = alpha_s
         model.trans.gated2 = True
-        model.trans.alpha = alpha
+        model.trans.alpha_i = alpha_i
         output = model(input_tensor)
     
     output = torch.clamp(output, 0, 1)
@@ -143,33 +146,33 @@ def process_image_with_cidnet(model, image, alpha, alpha_s):
     return enhanced_img
 
 
-def determine_parameters(input_image, mask, gt_image, model, device, n_iterations = 10):
+def determine_parameters(input_image, mask, gt_image, model, device, n_iterations=10):
     """베이지안 최적화를 사용하여 마스크 영역에 대한 최적의 파라미터를 찾는 함수"""
     
-    # 파라미터 범위 설정 (alpha: 0.8~1.2, alpha_s: 1.0~1.6)
+    # 파라미터 범위 설정 (alpha_s: 1.0~1.6, alpha_i: 0.8~1.2)
     param_bounds = {
-        'alpha': (0.8, 1.2),
-        'alpha_s': (1.0, 1.6)
+        'alpha_s': (1.0, 1.6),
+        'alpha_i': (0.8, 1.2)
     }
 
     # 초기 샘플 생성 (기본값과 그 근처 값들)
     X = np.array([
-        [1.00, 1.30],
-        [0.98, 1.20],
-        [1.02, 1.40],
-        [0.96, 1.10],
-        [1.04, 1.50],
-        [0.90, 1.60],
-        [1.10, 1.00],
-        [0.85, 1.15],
-        [1.15, 1.45],
-        [0.80, 1.35],
-        [1.20, 1.25]
+        [1.30, 1.00],
+        [1.20, 0.98],
+        [1.40, 1.02],
+        [1.10, 0.96],
+        [1.50, 1.04],
+        [1.60, 0.90],
+        [1.00, 1.10],
+        [1.15, 0.85],
+        [1.45, 1.15],
+        [1.35, 0.80],
+        [1.25, 1.20]
     ])
     
     # 목적 함수 계산 (마스크 영역의 이미지 품질 메트릭 기반)
     def objective_function(params):
-        alpha, alpha_s = params
+        alpha_s, alpha_i = params
         
         # 현재 파라미터로 이미지 처리
         input_tensor = transforms.ToTensor()(input_image)
@@ -182,8 +185,8 @@ def determine_parameters(input_image, mask, gt_image, model, device, n_iteration
         input_tensor = input_tensor.to(device)
         
         with torch.no_grad():
-            model.trans.alpha = alpha
             model.trans.alpha_s = alpha_s
+            model.trans.alpha_i = alpha_i
             model.trans.gated = True
             model.trans.gated2 = True
             output = model(input_tensor)
@@ -210,8 +213,8 @@ def determine_parameters(input_image, mask, gt_image, model, device, n_iteration
 
         # 파라미터가 적절한 범위에 있는지 확인
         param_score = 1.0
-        if not (param_bounds['alpha'][0] <= alpha <= param_bounds['alpha'][1] and
-                param_bounds['alpha_s'][0] <= alpha_s <= param_bounds['alpha_s'][1]):
+        if not (param_bounds['alpha_s'][0] <= alpha_s <= param_bounds['alpha_s'][1] and
+                param_bounds['alpha_i'][0] <= alpha_i <= param_bounds['alpha_i'][1]):
             param_score = 0.0
         
         # 최종 점수 계산 (PSNR, SSIM, 파라미터 범위 고려)
@@ -219,7 +222,7 @@ def determine_parameters(input_image, mask, gt_image, model, device, n_iteration
         return score
 
     # 최적화 전(기본값) 점수 계산
-    default_score = objective_function([1.0, 1.3])
+    default_score = objective_function([1.3, 1.0])
 
     y = np.array([objective_function(params) for params in X])
 
@@ -239,8 +242,8 @@ def determine_parameters(input_image, mask, gt_image, model, device, n_iteration
         
         # 다음 파라미터 후보 생성 (원본 스케일)
         x_test = np.random.uniform(
-            low=[param_bounds['alpha'][0], param_bounds['alpha_s'][0]],
-            high=[param_bounds['alpha'][1], param_bounds['alpha_s'][1]],
+            low=[param_bounds['alpha_s'][0], param_bounds['alpha_i'][0]],
+            high=[param_bounds['alpha_s'][1], param_bounds['alpha_i'][1]],
             size=(100, 2)
         )
         # 후보를 스케일에 맞게 변환
@@ -267,7 +270,54 @@ def determine_parameters(input_image, mask, gt_image, model, device, n_iteration
     return best_params[0], best_params[1], y[best_idx], default_score
 
 
-def group_masks_by_stats(masks, image, num_groups=5):
+def create_parameter_matrices(input_image, grouped_masks, gt_image, cidnet_model, device, n_iterations=10):
+    """마스크 그룹들과 배경에 대해 최적의 파라미터를 찾아 매트릭스 생성"""
+    
+    # 모든 마스크를 합쳐서 배경 마스크 생성
+    combined_mask = np.zeros_like(grouped_masks[0]['segmentation'], dtype=bool)
+    for mask in grouped_masks:
+        combined_mask |= mask['segmentation']
+    background_mask = ~combined_mask
+    
+    # 배경 영역 처리
+    bg_alpha_s, bg_alpha_i, best_score, default_score = determine_parameters(
+        input_image, background_mask, gt_image, cidnet_model, device, n_iterations=n_iterations
+    )
+    print(f"Background parameters: alpha_s={bg_alpha_s:.4f}, alpha_i={bg_alpha_i:.4f}, Best score={best_score:.4f}, Default score={default_score:.4f}")
+
+    # 파라미터 매트릭스 초기화
+    alpha_s_matrix = np.zeros((input_image.height, input_image.width), dtype=float)
+    alpha_i_matrix = np.zeros((input_image.height, input_image.width), dtype=float)
+
+    # 배경 영역에 배경 파라미터 적용
+    alpha_s_matrix[~combined_mask] = bg_alpha_s
+    alpha_i_matrix[~combined_mask] = bg_alpha_i
+
+    # 각 그룹 처리
+    for i, mask in enumerate(grouped_masks):
+        alpha_s, alpha_i, best_score, default_score = determine_parameters(
+            input_image, mask['segmentation'], gt_image, cidnet_model, device, n_iterations=n_iterations
+        )
+        print(f"Group {i+1} parameters: alpha_s={alpha_s:.4f}, alpha_i={alpha_i:.4f}, Best score={best_score:.4f}, Default score={default_score:.4f}")
+
+        # 기존 값이 있는 경우 평균 계산
+        mask_indices = mask['segmentation']
+        existing_values_s = alpha_s_matrix[mask_indices]
+        existing_values_i = alpha_i_matrix[mask_indices]
+        
+        # 0이 아닌 값이 있는 경우에만 평균 계산
+        non_zero_s = existing_values_s != 0
+        non_zero_i = existing_values_i != 0
+        
+        alpha_s_matrix[mask_indices] = np.where(non_zero_s, 
+            (existing_values_s + alpha_s) / 2, alpha_s)
+        alpha_i_matrix[mask_indices] = np.where(non_zero_i,
+            (existing_values_i + alpha_i) / 2, alpha_i)
+
+    return alpha_s_matrix, alpha_i_matrix
+
+
+def group_masks_by_stats(masks, num_groups=5):
     """마스크를 밝기와 대비를 기준으로 그룹화하고, 더 효과적인 클러스터링을 수행"""
     mask_stats = []
     
@@ -282,7 +332,7 @@ def group_masks_by_stats(masks, image, num_groups=5):
     # 정규화
     area_norm = (area_values - np.min(area_values)) / (np.max(area_values) - np.min(area_values))
     
-    # 가중치 적용 (면적이 큰 마스크에 더 높은 가중치)
+    # 가중치 적용 (면적이 큰 마스크에 더 높은 가중치) 
     features = np.column_stack([area_norm])
     
     kmeans = KMeans(n_clusters=num_groups, random_state=42, n_init=10)
@@ -310,6 +360,100 @@ def group_masks_by_stats(masks, image, num_groups=5):
     return grouped_masks
 
 
+def visualize_mask_groups(image, grouped_masks):
+    """마스크 그룹들을 다른 색깔로 표시한 이미지를 생성"""
+    import matplotlib.pyplot as plt
+    
+    # 원본 이미지를 numpy array로 변환
+    if isinstance(image, Image.Image):
+        img_array = np.array(image)
+    else:
+        img_array = image.copy()
+    
+    # 색깔 팔레트 생성 (각 그룹별로 다른 색깔)
+    colors = plt.cm.Set1(np.linspace(0, 1, len(grouped_masks)))
+    
+    # 마스크 시각화 이미지 생성
+    mask_overlay = img_array.copy().astype(float)
+    
+    for i, mask_group in enumerate(grouped_masks):
+        mask = mask_group['segmentation']
+        color = colors[i][:3]  # RGB 값만 사용
+        
+        # 마스크 영역에 색깔 오버레이 (반투명 효과)
+        for c in range(3):
+            mask_overlay[mask, c] = mask_overlay[mask, c] * 0.7 + color[c] * 255 * 0.3
+    
+    mask_overlay = np.clip(mask_overlay, 0, 255).astype(np.uint8)
+    
+    # 결과 이미지들 생성
+    fig, axes = plt.subplots(2, 2, figsize=(15, 12))
+    fig.suptitle('Mask Groups Visualization', fontsize=16)
+    
+    # 원본 이미지
+    axes[0, 0].imshow(img_array)
+    axes[0, 0].set_title('Original Image')
+    axes[0, 0].axis('off')
+    
+    # 마스크 오버레이
+    axes[0, 1].imshow(mask_overlay)
+    axes[0, 1].set_title(f'Mask Groups Overlay ({len(grouped_masks)} groups)')
+    axes[0, 1].axis('off')
+    
+    # 개별 마스크 그룹들
+    axes[1, 0].imshow(img_array)
+    for i, mask_group in enumerate(grouped_masks):
+        mask = mask_group['segmentation']
+        color = colors[i][:3]
+        
+        # 마스크 경계선 그리기
+        from scipy import ndimage
+        mask_edges = ndimage.binary_dilation(mask) ^ mask
+        for c in range(3):
+            img_array[mask_edges, c] = color[c] * 255
+    
+    axes[1, 0].imshow(img_array)
+    axes[1, 0].set_title('Mask Group Boundaries')
+    axes[1, 0].axis('off')
+    
+    # 배경 마스크
+    combined_mask = np.zeros_like(grouped_masks[0]['segmentation'], dtype=bool)
+    for mask in grouped_masks:
+        combined_mask |= mask['segmentation']
+    background_mask = ~combined_mask
+    
+    background_vis = img_array.copy()
+    # 배경 영역을 빨간색으로 칠하기
+    background_vis[background_mask] = [255, 0, 0]  # 빨간색
+    axes[1, 1].imshow(background_vis.astype(np.uint8))
+    axes[1, 1].set_title('Background Area (red regions)')
+    axes[1, 1].axis('off')
+    
+    # 범례 추가
+    legend_elements = []
+    for i, mask_group in enumerate(grouped_masks):
+        area = mask_group['area']
+        color = colors[i][:3]
+        legend_elements.append(plt.Line2D([0], [0], marker='s', color='w', 
+                                        markerfacecolor=color, markersize=10,
+                                        label=f'Group {i+1} (area: {area})'))
+    
+    axes[0, 1].legend(handles=legend_elements, loc='center left', bbox_to_anchor=(1, 0.5))
+    
+    plt.tight_layout()
+    
+    # 시각화 창 표시
+    print(f"Showing mask groups visualization (close window to continue)")
+    print(f"  Total groups: {len(grouped_masks)}")
+    for i, mask_group in enumerate(grouped_masks):
+        print(f"  Group {i+1}: area = {mask_group['area']}")
+    
+    # 창 표시 (블로킹 방식)
+    plt.show()
+    
+    # 메모리 정리는 자동으로 됨
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description='Process images using CIDNet and SAM')
     parser.add_argument('--input_dir', type=str, default="datasets/LOLdataset/eval15/low",
@@ -322,6 +466,12 @@ def parse_args():
                         help='CIDNet model name or path from Hugging Face')
     parser.add_argument('--sam_model', type=str, default="Gourieff/ReActor/models/sams/sam_vit_b_01ec64.pth",
                         help='SAM model path in format: repo_id/filename (e.g., Gourieff/ReActor/models/sams/sam_vit_b_01ec64.pth)')
+    parser.add_argument('--visualize_masks', action='store_true', default=False,
+                        help='Save mask group visualization images')
+    parser.add_argument('--num_groups', type=int, default=10,
+                        help='Number of mask groups to create')
+    parser.add_argument('--iterations', type=int, default=10,
+                        help='Number of iterations for Bayesian optimization')
     return parser.parse_args()
 
 
@@ -370,7 +520,7 @@ if __name__ == "__main__":
         gt_image = Image.open(gt_path).convert('RGB')
         
         # 1. 통으로 CIDNet 처리
-        whole_enhanced = process_image_with_cidnet(cidnet_model, input_image, 1.0, 1.3)
+        whole_enhanced = process_image_with_cidnet(cidnet_model, input_image, 1.3, 1.0)
         whole_output_path = os.path.join(whole_dir, f"{input_filename}.png")
         whole_enhanced.save(whole_output_path)
         
@@ -381,51 +531,23 @@ if __name__ == "__main__":
         whole_metrics['lpips'].append(whole_lpips.item())
 
 
-
-
         # 2. 영역별 CIDNet 처리
         initial_masks = sam_model.generate(np.array(input_image))
 
         # 마스크 그룹핑
-        grouped_masks = group_masks_by_stats(initial_masks, input_image)
-        
-        # 모든 마스크를 합쳐서 배경 마스크 생성
-        combined_mask = np.zeros_like(grouped_masks[0]['segmentation'], dtype=bool)
-        for mask in grouped_masks:
-            combined_mask |= mask['segmentation']
-        background_mask = ~combined_mask
-        
-        # 배경 영역 처리
-        bg_alpha, bg_alpha_s, best_score, default_score = determine_parameters(input_image, background_mask, gt_image, cidnet_model, device)
-        print(f"Background parameters: alpha={bg_alpha:.4f}, alpha_s={bg_alpha_s:.4f}, Best score={best_score:.4f}, Default score={default_score:.4f}")
+        grouped_masks = group_masks_by_stats(
+            initial_masks, num_groups=args.num_groups
+        )
 
+        if args.visualize_masks:
+            visualize_mask_groups(input_image, grouped_masks)
 
-        alpha_s_matrix = np.zeros((input_image.height, input_image.width), dtype=float)
-        alpha_matrix = np.zeros((input_image.height, input_image.width), dtype=float)
+        # 파라미터 매트릭스 생성
+        alpha_s_matrix, alpha_i_matrix = create_parameter_matrices(
+            input_image, grouped_masks, gt_image, cidnet_model, device, n_iterations=args.iterations
+        )
 
-        alpha_s_matrix[~combined_mask] = bg_alpha_s
-        alpha_matrix[~combined_mask] = bg_alpha
-
-        # 각 그룹 처리
-        for i, mask in enumerate(grouped_masks):
-            alpha, alpha_s, best_score, default_score = determine_parameters(input_image, mask['segmentation'], gt_image, cidnet_model, device)
-            print(f"Group {i+1} parameters: alpha={alpha:.4f}, alpha_s={alpha_s:.4f}, Best score={best_score:.4f}, Default score={default_score:.4f}")
-
-            # 기존 값이 있는 경우 평균 계산
-            mask_indices = mask['segmentation']
-            existing_values_s = alpha_s_matrix[mask_indices]
-            existing_values = alpha_matrix[mask_indices]
-            
-            # 0이 아닌 값이 있는 경우에만 평균 계산
-            non_zero_s = existing_values_s != 0
-            non_zero = existing_values != 0
-            
-            alpha_s_matrix[mask_indices] = np.where(non_zero_s, 
-                (existing_values_s + alpha_s) / 2, alpha_s)
-            alpha_matrix[mask_indices] = np.where(non_zero,
-                (existing_values + alpha) / 2, alpha)
-
-        output_image = process_image_with_cidnet(cidnet_model, input_image, alpha_matrix, alpha_s_matrix)
+        output_image = process_image_with_cidnet(cidnet_model, input_image, alpha_s_matrix, alpha_i_matrix)
         output_path = os.path.join(sam_dir, f"{input_filename}.png")
         output_image.save(output_path)
         

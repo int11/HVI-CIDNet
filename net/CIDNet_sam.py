@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from net.HVI_transform import RGB_HVI
+from net.HVI_transform_sam import RGB_HVI
 from net.transformer_utils import *
 from net.LCA import *
 from huggingface_hub import PyTorchModelHubMixin
@@ -98,6 +98,15 @@ class CIDNet(nn.Module, PyTorchModelHubMixin):
         
         self.trans = RGB_HVI()
         
+        # Alpha prediction layer for alpha_s and alpha_i
+        self.alpha_predictor = nn.Sequential(
+            nn.ReplicationPad2d(1),
+            nn.Conv2d(3, ch1, 3, stride=1, padding=0, bias=False),  # input channels = 3 (HVI)
+            nn.GroupNorm(1, ch1),
+            nn.SiLU(inplace=True),
+            nn.ReplicationPad2d(1),
+            nn.Conv2d(ch1, 2, 3, stride=1, padding=0, bias=False),  # output 2 channels for alpha_s and alpha_i
+        )
 
 
         if cidnet_model_path != None:
@@ -175,9 +184,15 @@ class CIDNet(nn.Module, PyTorchModelHubMixin):
         
         output_hvi = torch.cat([hv_0, i_dec0], dim=1) + hvi
 
+        # Predict alpha_s and alpha_i values
+        alpha_maps = self.alpha_predictor(output_hvi)
+        # Sigmoid를 통과시켜 0~1 범위로 만든 후 원하는 범위로 스케일링
+        alpha_s = torch.sigmoid(alpha_maps[:, 0:1, :, :]) * 0.6 + 1.0  # 1.0~1.6
+        alpha_i = torch.sigmoid(alpha_maps[:, 1:2, :, :]) * 0.4 + 0.8  # 0.8~1.2
+
         sam_output = self.sam(x)
 
-        output_rgb = self.trans.HVI_to_RGB(output_hvi)
+        output_rgb = self.trans.HVI_to_RGB(output_hvi, alpha_s, alpha_i)
 
         return output_rgb
     

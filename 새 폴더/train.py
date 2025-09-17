@@ -1,4 +1,7 @@
 import os
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import torch
 import random
 from torchvision import transforms
@@ -15,9 +18,7 @@ from loss.losses import *
 from data.scheduler import *
 from tqdm import tqdm
 from datetime import datetime
-import glob
 
-from DCNv4 import functions
 
 def seed_torch():
     seed = random.randint(1, 1000000)
@@ -164,7 +165,7 @@ if __name__ == '__main__':
         if epoch % opt.snapshots == 0:
             model_out_path = checkpoint(epoch)
             avg_psnr, avg_ssim, avg_lpips = eval(model, testing_data_loader, model_out_path, 
-                 opt, alpha_i=1, use_GT_mean=opt.use_GT_mean)
+                 opt, alpha_i=0.8, use_GT_mean=opt.use_GT_mean)
             print("===> Avg.PSNR: {:.4f} dB ".format(avg_psnr))
             print("===> Avg.SSIM: {:.4f} ".format(avg_ssim))
             print("===> Avg.LPIPS: {:.4f} ".format(avg_lpips))

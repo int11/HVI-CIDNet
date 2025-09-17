@@ -10,20 +10,18 @@ from net.CIDNet import CIDNet
 from measure import metrics
 
 
-def eval(model, testing_data_loader, model_path, opt, alpha=1.0, gamma=1.0, use_GT_mean=False, unpaired=False):
+def eval(model, testing_data_loader, model_path, opt, alpha_i=1.0, use_GT_mean=False, unpaired=False):
     torch.set_grad_enabled(False)
     model.load_state_dict(torch.load(model_path, map_location=lambda storage, loc: storage))
     print('Pre-trained model is loaded.')
     
-    # output_folder를 opt로부터 자동 생성
-    output_folder = f'./output/{opt.dataset}/'
+
     model.eval()
     print('Evaluation:')
     
     # opt에서 필요한 값들 가져오기
     LOL = (opt.dataset == 'lol_v1')
     v2 = (opt.dataset == 'lolv2_real')
-    unpaired = False  # 기본값
     norm_size = not (opt.dataset in ['SICE_mix', 'SICE_grad'])
     
     # label_dir 설정
@@ -42,10 +40,10 @@ def eval(model, testing_data_loader, model_path, opt, alpha=1.0, gamma=1.0, use_
         model.trans.gated = True
     elif v2:
         model.trans.gated2 = True
-        model.trans.alpha = alpha
+        model.trans.alpha_i = alpha_i
     elif unpaired:
         model.trans.gated2 = True
-        model.trans.alpha = alpha
+        model.trans.alpha_i = alpha_i
     output_list = []  # 출력 이미지 저장용 리스트
     label_list = []   # 라벨 이미지 저장용 리스트
     
@@ -57,10 +55,7 @@ def eval(model, testing_data_loader, model_path, opt, alpha=1.0, gamma=1.0, use_
                 input, name, h, w = batch[0], batch[1], batch[2], batch[3]
             
             input = input.cuda()
-            output = model(input**gamma) 
-            
-        if not os.path.exists(output_folder):          
-            os.mkdir(output_folder)  
+            output = model(input) 
             
         output = torch.clamp(output.cuda(),0,1).cuda()
         if not norm_size:
@@ -112,7 +107,6 @@ if __name__ == '__main__':
     eval_parser.add_argument('--NPE', action='store_true', help='output NPE dataset')
     eval_parser.add_argument('--VV', action='store_true', help='output VV dataset')
     eval_parser.add_argument('--alpha', type=float, default=1.0)
-    eval_parser.add_argument('--gamma', type=float, default=1.0)
     eval_parser.add_argument('--unpaired_weights', type=str, default='./weights/LOLv2_syn/w_perc.pth')
 
     ep = eval_parser.parse_args()
@@ -129,7 +123,6 @@ if __name__ == '__main__':
     alpha = None
     if ep.lol:
         eval_data = DataLoader(dataset=get_eval_set("./datasets/LOLv1/eval15/low"), num_workers=num_workers, batch_size=1, shuffle=False)
-        output_folder = './output/LOLv1/'
         if ep.perc:
             weight_path = './weights/LOLv1/w_perc.pth'
         else:
@@ -138,7 +131,6 @@ if __name__ == '__main__':
             
     elif ep.lol_v2_real:
         eval_data = DataLoader(dataset=get_eval_set("./datasets/LOLv2/Real_captured/Test/Low"), num_workers=num_workers, batch_size=1, shuffle=False)
-        output_folder = './output/LOLv2_real/'
         if ep.best_GT_mean:
             weight_path = './weights/LOLv2_real/w_perc.pth'
             alpha = 0.84
@@ -151,7 +143,6 @@ if __name__ == '__main__':
             
     elif ep.lol_v2_syn:
         eval_data = DataLoader(dataset=get_eval_set("./datasets/LOLv2/Synthetic/Test/Low"), num_workers=num_workers, batch_size=1, shuffle=False)
-        output_folder = './output/LOLv2_syn/'
         if ep.perc:
             weight_path = './weights/LOLv2_syn/w_perc.pth'
         else:
@@ -159,40 +150,30 @@ if __name__ == '__main__':
             
     elif ep.SICE_grad:
         eval_data = DataLoader(dataset=get_SICE_eval_set("./datasets/SICE/SICE_Grad"), num_workers=num_workers, batch_size=1, shuffle=False)
-        output_folder = './output/SICE_grad/'
         weight_path = './weights/SICE.pth'
-        norm_size = False
         
     elif ep.SICE_mix:
         eval_data = DataLoader(dataset=get_SICE_eval_set("./datasets/SICE/SICE_Mix"), num_workers=num_workers, batch_size=1, shuffle=False)
-        output_folder = './output/SICE_mix/'
         weight_path = './weights/SICE.pth'
-        norm_size = False
     
     elif ep.unpaired: 
         if ep.DICM:
             eval_data = DataLoader(dataset=get_SICE_eval_set("./datasets/DICM"), num_workers=num_workers, batch_size=1, shuffle=False)
-            output_folder = './output/DICM/'
         elif ep.LIME:
             eval_data = DataLoader(dataset=get_SICE_eval_set("./datasets/LIME"), num_workers=num_workers, batch_size=1, shuffle=False)
-            output_folder = './output/LIME/'
         elif ep.MEF:
             eval_data = DataLoader(dataset=get_SICE_eval_set("./datasets/MEF"), num_workers=num_workers, batch_size=1, shuffle=False)
-            output_folder = './output/MEF/'
         elif ep.NPE:
             eval_data = DataLoader(dataset=get_SICE_eval_set("./datasets/NPE"), num_workers=num_workers, batch_size=1, shuffle=False)
-            output_folder = './output/NPE/'
         elif ep.VV:
             eval_data = DataLoader(dataset=get_SICE_eval_set("./datasets/VV"), num_workers=num_workers, batch_size=1, shuffle=False)
-            output_folder = './output/VV/'
         elif ep.custome:
             eval_data = DataLoader(dataset=get_SICE_eval_set(ep.custome_path), num_workers=num_workers, batch_size=1, shuffle=False)
-            output_folder = './output/custome/'
         alpha = ep.alpha
         norm_size = False
         weight_path = ep.unpaired_weights
         
     eval_net = CIDNet().cuda()
 
-    eval(eval_net, eval_data, weight_path, ep, alpha=alpha, gamma=ep.gamma, use_GT_mean=True, unpaired=ep.unpaired)
+    eval(eval_net, eval_data, weight_path, ep, alpha_i=alpha, use_GT_mean=True, unpaired=ep.unpaired)
 
