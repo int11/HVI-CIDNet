@@ -1,5 +1,4 @@
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 import argparse
 from tqdm import tqdm
 from data.data import *
@@ -8,14 +7,15 @@ from torch.utils.data import DataLoader
 from loss.losses import *
 from net.CIDNet import CIDNet
 from measure import metrics
+import dist
 
-
-def eval(model, testing_data_loader, model_path, opt, alpha_i=1.0, use_GT_mean=False, unpaired=False):
+def eval(model, testing_data_loader, opt, alpha_i=1.0, use_GT_mean=False, unpaired=False):
     torch.set_grad_enabled(False)
-    model.load_state_dict(torch.load(model_path, map_location=lambda storage, loc: storage))
+    
+    model = dist.de_parallel(model)
+
     print('Pre-trained model is loaded.')
     
-
     model.eval()
     print('Evaluation:')
     
@@ -45,7 +45,7 @@ def eval(model, testing_data_loader, model_path, opt, alpha_i=1.0, use_GT_mean=F
         model.trans.gated2 = True
         model.trans.alpha_i = alpha_i
     output_list = []  # 출력 이미지 저장용 리스트
-    label_list = []   # 라벨 이미지 저장용 리스트
+    gt_list = []   # 라벨 이미지 저장용 리스트
     
     for batch in tqdm(testing_data_loader):
         with torch.no_grad():
@@ -66,29 +66,29 @@ def eval(model, testing_data_loader, model_path, opt, alpha_i=1.0, use_GT_mean=F
         output_list.append(output_np)
         
         # Load corresponding ground truth image
-        if label_dir:
-            label_path = os.path.join(label_dir, name[0])
-            if os.path.exists(label_path):
-                from PIL import Image
-                label_img = Image.open(label_path).convert('RGB')
-                label_list.append(label_img)
+        gt_path = os.path.join(label_dir, name[0])
+        if os.path.exists(gt_path):
+            from PIL import Image
+            gt_img = Image.open(gt_path).convert('RGB')
+            gt_list.append(gt_img)
         
         torch.cuda.empty_cache()
-    print('===> End evaluation')
+    # metrics 계산 및 반환
+    avg_psnr, avg_ssim, avg_lpips = metrics(output_list, gt_list, use_GT_mean=use_GT_mean)
+    
+    # 설정 복원
     if LOL:
         model.trans.gated = False
     elif v2:
         model.trans.gated2 = False
-    torch.set_grad_enabled(True)
     
-    # metrics 계산 및 반환
-    avg_psnr, avg_ssim, avg_lpips = metrics(output_list, label_list, use_GT_mean=use_GT_mean)
+    torch.set_grad_enabled(True)
     return avg_psnr, avg_ssim, avg_lpips
     
 if __name__ == '__main__':
     eval_parser = argparse.ArgumentParser(description='Eval')
     eval_parser.add_argument('--perc', action='store_true', help='trained with perceptual loss')
-    eval_parser.add_argument('--lol', action='store_true', help='output lolv1 dataset')
+    eval_parser.add_argument('--lol', action='store_true', help='output lolv1 dataset', default=True)
     eval_parser.add_argument('--lol_v2_real', action='store_true', help='output lol_v2_real dataset')
     eval_parser.add_argument('--lol_v2_syn', action='store_true', help='output lol_v2_syn dataset')
     eval_parser.add_argument('--SICE_grad', action='store_true', help='output SICE_grad dataset')

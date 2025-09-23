@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from loss.vgg_arch import VGGFeatureExtractor, Registry
 from loss.loss_utils import *
-
+import dist
 
 _reduction_modes = ['none', 'mean', 'sum']
 
@@ -35,14 +35,14 @@ class L1Loss(nn.Module):
         """
         return self.loss_weight * l1_loss(
             pred, target, weight, reduction=self.reduction)
-        
+         
         
         
 class EdgeLoss(nn.Module):
     def __init__(self,loss_weight=1.0, reduction='mean'):
         super(EdgeLoss, self).__init__()
         k = torch.Tensor([[.05, .25, .4, .25, .05]])
-        self.kernel = torch.matmul(k.t(),k).unsqueeze(0).repeat(3,1,1,1).cuda()
+        self.kernel = torch.matmul(k.t(),k).unsqueeze(0).repeat(3,1,1,1).to(dist.get_device())
 
         self.weight = loss_weight
         

@@ -3,6 +3,7 @@ import torch
 from collections import OrderedDict
 from torch import nn as nn
 from torchvision.models import vgg as vgg
+import dist
 
 class Registry():
     """
@@ -199,7 +200,7 @@ class VGGFeatureExtractor(nn.Module):
             else:
                 modified_net[k] = v
 
-        self.vgg_net = nn.Sequential(modified_net).cuda()
+        self.vgg_net = nn.Sequential(modified_net).to(dist.get_device())
 
         if not requires_grad:
             self.vgg_net.eval()
@@ -212,9 +213,9 @@ class VGGFeatureExtractor(nn.Module):
 
         if self.use_input_norm:
             # the mean is for image with range [0, 1]
-            self.register_buffer('mean', torch.Tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1).cuda())
+            self.register_buffer('mean', torch.Tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1).to(dist.get_device()))
             # the std is for image with range [0, 1]
-            self.register_buffer('std', torch.Tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1).cuda())
+            self.register_buffer('std', torch.Tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1).to(dist.get_device()))
 
     def forward(self, x):
         """Forward function.

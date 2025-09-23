@@ -81,6 +81,8 @@ def get_position_from_periods(iteration, cumulative_period):
     for i, period in enumerate(cumulative_period):
         if iteration <= period:
             return i
+    # If iteration is beyond all periods, return the last index
+    return len(cumulative_period) - 1
         
 class CosineAnnealingRestartCyclicLR(_LRScheduler):
     """ Cosine annealing with restarts learning rate scheme.

@@ -16,27 +16,10 @@ from data.scheduler import *
 from tqdm import tqdm
 from datetime import datetime
 import glob
+import dist
 
-from DCNv4 import functions
-
-def seed_torch():
-    seed = random.randint(1, 1000000)
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    os.environ['PYTHONHASHSEED'] = str(seed)
     
-def train_init():
-    seed_torch()
-    cudnn.benchmark = True
-    os.environ['CUDA_VISIBLE_DEVICES'] = '0'
-    cuda = opt.gpu_mode
-    if cuda and not torch.cuda.is_available():
-        raise Exception("No GPU found, please run without --cuda")
-    
-def train(epoch):
+def train_one_epoch(epoch, model, optimizer, training_data_loader, args, L1_loss, P_loss, E_loss, D_loss):
     model.train()
     loss_print = 0
     pic_cnt = 0
@@ -44,28 +27,36 @@ def train(epoch):
     pic_last_10 = 0
     train_len = len(training_data_loader)
     iter = 0
-    torch.autograd.set_detect_anomaly(opt.grad_detect)
+    torch.autograd.set_detect_anomaly(args.grad_detect)
     for batch in tqdm(training_data_loader):
         im1, im2, path1, path2 = batch[0], batch[1], batch[2], batch[3]
-        im1 = im1.cuda()
-        im2 = im2.cuda()
+
+        # Use rank-based device assignment for distributed training
+        device = dist.get_device()
+    
+        im1 = im1.to(device)
+        im2 = im2.to(device)
         
         # use random gamma function (enhancement curve) to improve generalization
-        if opt.gamma:
-            gamma = random.randint(opt.start_gamma,opt.end_gamma) / 100.0
+        if args.gamma:
+            gamma = random.randint(args.start_gamma,args.end_gamma) / 100.0
             output_rgb = model(im1 ** gamma)  
         else:
             output_rgb = model(im1)  
             
         gt_rgb = im2
-        output_hvi = model.RGB_to_HVI(output_rgb)
-        gt_hvi = model.RGB_to_HVI(gt_rgb)
-        loss_hvi = L1_loss(output_hvi, gt_hvi) + D_loss(output_hvi, gt_hvi) + E_loss(output_hvi, gt_hvi) + opt.P_weight * P_loss(output_hvi, gt_hvi)[0]
-        loss_rgb = L1_loss(output_rgb, gt_rgb) + D_loss(output_rgb, gt_rgb) + E_loss(output_rgb, gt_rgb) + opt.P_weight * P_loss(output_rgb, gt_rgb)[0]
-        loss = loss_rgb + opt.HVI_weight * loss_hvi
+        
+        # Get RGB_to_HVI method from the actual model (handle DDP wrapper)
+        rgb_to_hvi_fn = model.module.RGB_to_HVI if hasattr(model, 'module') else model.RGB_to_HVI
+        
+        output_hvi = rgb_to_hvi_fn(output_rgb)
+        gt_hvi = rgb_to_hvi_fn(gt_rgb)
+        loss_hvi = L1_loss(output_hvi, gt_hvi) + D_loss(output_hvi, gt_hvi) + E_loss(output_hvi, gt_hvi) + args.P_weight * P_loss(output_hvi, gt_hvi)[0]
+        loss_rgb = L1_loss(output_rgb, gt_rgb) + D_loss(output_rgb, gt_rgb) + E_loss(output_rgb, gt_rgb) + args.P_weight * P_loss(output_rgb, gt_rgb)[0]
+        loss = loss_rgb + args.HVI_weight * loss_hvi
         iter += 1
         
-        if opt.grad_clip:
+        if args.grad_clip:
             torch.nn.utils.clip_grad_norm_(model.parameters(), 0.01, norm_type=2)
         
         optimizer.zero_grad()
@@ -83,88 +74,150 @@ def train(epoch):
             pic_last_10 = 0
             output_img = transforms.ToPILImage()((output_rgb)[0].squeeze(0))
             gt_img = transforms.ToPILImage()((gt_rgb)[0].squeeze(0))
-            if not os.path.exists(opt.val_folder+'training'):          
-                os.mkdir(opt.val_folder+'training') 
-            output_img.save(opt.val_folder+'training/test.png')
-            gt_img.save(opt.val_folder+'training/gt.png')
+            if not os.path.exists(args.val_folder+'training'):          
+                os.mkdir(args.val_folder+'training') 
+            output_img.save(args.val_folder+'training/test.png')
+            gt_img.save(args.val_folder+'training/gt.png')
     return loss_print, pic_cnt
                 
 
-def checkpoint(epoch):
+def checkpoint(epoch, model, optimizer):
     if not os.path.exists("./weights"):          
         os.mkdir("./weights") 
     if not os.path.exists("./weights/train"):          
         os.mkdir("./weights/train")  
     model_out_path = "./weights/train/epoch_{}.pth".format(epoch)
-    torch.save(model.state_dict(), model_out_path)
+    
+    # Save model and optimizer states with epoch info
+    # Use de_parallel to handle distributed models
+    model_state = dist.de_parallel(model).state_dict() if dist.is_dist_available_and_initialized() else model.state_dict()
+    
+    checkpoint_dict = {
+        'model_state_dict': model_state,
+        'optimizer_state_dict': optimizer.state_dict(),
+        'epoch': epoch
+    }
+    torch.save(checkpoint_dict, model_out_path)
     print("Checkpoint saved to {}".format(model_out_path))
     return model_out_path
     
 
 def build_model():
     print('===> Building model ')
-    model = CIDNet().cuda()
-    if opt.start_epoch > 0:
-        pth = f"./weights/train/epoch_{opt.start_epoch}.pth"
-        model.load_state_dict(torch.load(pth, map_location=lambda storage, loc: storage))
+    model = CIDNet()
+    model = model.to(dist.get_device())
     return model
 
-def make_scheduler():
-    optimizer = optim.Adam(model.parameters(), lr=opt.lr)      
-    if opt.cos_restart_cyclic:
-        if opt.start_warmup:
-            scheduler_step = CosineAnnealingRestartCyclicLR(optimizer=optimizer, periods=[(opt.nEpochs//4)-opt.warmup_epochs, (opt.nEpochs*3)//4], restart_weights=[1,1],eta_mins=[0.0002,0.0000001])
-            scheduler = GradualWarmupScheduler(optimizer, multiplier=1, total_epoch=opt.warmup_epochs, after_scheduler=scheduler_step)
-        else:
-            scheduler = CosineAnnealingRestartCyclicLR(optimizer=optimizer, periods=[opt.nEpochs//4, (opt.nEpochs*3)//4], restart_weights=[1,1],eta_mins=[0.0002,0.0000001])
-    elif opt.cos_restart:
-        if opt.start_warmup:
-            scheduler_step = CosineAnnealingRestartLR(optimizer=optimizer, periods=[opt.nEpochs - opt.warmup_epochs - opt.start_epoch], restart_weights=[1],eta_min=1e-7)
-            scheduler = GradualWarmupScheduler(optimizer, multiplier=1, total_epoch=opt.warmup_epochs, after_scheduler=scheduler_step)
-        else:
-            scheduler = CosineAnnealingRestartLR(optimizer=optimizer, periods=[opt.nEpochs - opt.start_epoch], restart_weights=[1],eta_min=1e-7)
+
+def make_scheduler(optimizer, args):
+    # Calculate last_epoch for resumed training
+    cosine_last_epoch = -1 if args.start_epoch == 0 else args.start_epoch - 1 - args.warmup_epochs
+    
+    if args.cos_restart_cyclic:
+        # CosineAnnealingRestartCyclicLR scheduler
+        periods = [(args.nEpochs//4)-args.warmup_epochs, (args.nEpochs*3)//4] if args.start_warmup else [args.nEpochs//4, (args.nEpochs*3)//4]
+        scheduler_step = CosineAnnealingRestartCyclicLR(
+            optimizer=optimizer, 
+            periods=periods, 
+            restart_weights=[1,1], 
+            eta_mins=[0.0002,0.0000001],
+            last_epoch=cosine_last_epoch
+        )
+        
+    elif args.cos_restart:
+        # CosineAnnealingRestartLR scheduler
+        periods = [args.nEpochs - args.warmup_epochs] if args.start_warmup else [args.nEpochs]
+        scheduler_step = CosineAnnealingRestartLR(
+            optimizer=optimizer, 
+            periods=periods, 
+            restart_weights=[1], 
+            eta_min=1e-7,
+            last_epoch=cosine_last_epoch
+        )
+        
     else:
         raise Exception("should choose a scheduler")
-    return optimizer,scheduler
+    
+    # Create main scheduler (with or without warmup)
+    if args.start_warmup:
+        scheduler = GradualWarmupScheduler(
+            optimizer, 
+            multiplier=1, 
+            total_epoch=args.warmup_epochs, 
+            after_scheduler=scheduler_step
+        )
+        # Set main scheduler last_epoch for resumed training
+        if args.start_epoch > 0:
+            scheduler.last_epoch = args.start_epoch - 1
+    else:
+        scheduler = scheduler_step
 
-def init_loss():
-    L1_weight = opt.L1_weight
-    D_weight = opt.D_weight 
-    E_weight = opt.E_weight 
+    return scheduler
+
+def init_loss(args):
+    L1_weight = args.L1_weight
+    D_weight = args.D_weight 
+    E_weight = args.E_weight 
     P_weight = 1.0
     
-    L1_loss= L1Loss(loss_weight=L1_weight, reduction='mean').cuda()
-    D_loss = SSIM(weight=D_weight).cuda()
-    E_loss = EdgeLoss(loss_weight=E_weight).cuda()
-    P_loss = PerceptualLoss({'conv1_2': 1, 'conv2_2': 1,'conv3_4': 1,'conv4_4': 1}, perceptual_weight = P_weight ,criterion='mse').cuda()
+    # Use specific device if provided, otherwise use rank-based device
+    device = dist.get_device()
+    
+    L1_loss= L1Loss(loss_weight=L1_weight, reduction='mean').to(device)
+    D_loss = SSIM(weight=D_weight).to(device)
+    E_loss = EdgeLoss(loss_weight=E_weight).to(device)
+    P_loss = PerceptualLoss({'conv1_2': 1, 'conv2_2': 1,'conv3_4': 1,'conv4_4': 1}, perceptual_weight = P_weight ,criterion='mse').to(device)
     return L1_loss,P_loss,E_loss,D_loss
 
-if __name__ == '__main__':  
-    # preparision
-    opt = option().parse_args()
-    train_init()
-    training_data_loader, testing_data_loader = load_datasets(opt)
+def train(rank, args):
+    if rank is not None:
+        dist.init_distributed(rank)
+
+    training_data_loader, testing_data_loader = load_datasets(args)
     model = build_model()
-    optimizer,scheduler = make_scheduler()
-    L1_loss,P_loss,E_loss,D_loss = init_loss()
+    L1_loss,P_loss,E_loss,D_loss = init_loss(args)
+    optimizer = optim.Adam(model.parameters(), lr=args.lr)
     
+    # Load checkpoint if start_epoch > 0
+    if args.start_epoch > 0:
+        pth = f"./weights/train/epoch_{args.start_epoch}.pth"
+        checkpoint_data = torch.load(pth, map_location=lambda storage, loc: storage)
+        model.load_state_dict(checkpoint_data['model_state_dict'])
+        optimizer.load_state_dict(checkpoint_data['optimizer_state_dict'])
+        print(f"Loaded checkpoint with optimizer state from epoch {checkpoint_data['epoch']}")
+
+    
+    # Create scheduler after loading optimizer state
+    scheduler = make_scheduler(optimizer, args)
+    
+
+    # Wrap for distributed training if available
+    if dist.is_dist_available_and_initialized():
+        training_data_loader = dist.warp_loader(training_data_loader, args.shuffle)
+        model = dist.warp_model(model, find_unused_parameters=True, sync_bn=True)
+
+
     # train
     psnr = []
     ssim = []
     lpips = []
-    start_epoch=0
-    if opt.start_epoch > 0:
-        start_epoch = opt.start_epoch
-    if not os.path.exists(opt.val_folder):          
-        os.mkdir(opt.val_folder) 
+    start_epoch = 0
+    if args.start_epoch > 0:
+        start_epoch = args.start_epoch
 
-    for epoch in range(start_epoch+1, opt.nEpochs + start_epoch + 1):
-        epoch_loss, pic_num = train(epoch)
+    now = datetime.now().strftime("%Y-%m-%d-%H%M%S")
+    
+    for epoch in range(start_epoch+1, args.nEpochs + start_epoch + 1):
+        # Set epoch for distributed sampler
+        if dist.is_dist_available_and_initialized():
+            training_data_loader.sampler.set_epoch(epoch)
+            
+        epoch_loss, pic_num = train_one_epoch(epoch, model, optimizer, training_data_loader, args, L1_loss, P_loss, E_loss, D_loss)
         scheduler.step()
-        if epoch % opt.snapshots == 0:
-            model_out_path = checkpoint(epoch)
-            avg_psnr, avg_ssim, avg_lpips = eval(model, testing_data_loader, model_out_path, 
-                 opt, alpha_i=1, use_GT_mean=opt.use_GT_mean)
+        if epoch % args.snapshots == 0 and dist.is_main_process():
+            model_out_path = checkpoint(epoch, model, optimizer)
+        
+            avg_psnr, avg_ssim, avg_lpips = eval(model, testing_data_loader, args, alpha_i=1, use_GT_mean=args.use_GT_mean)
             print("===> Avg.PSNR: {:.4f} dB ".format(avg_psnr))
             print("===> Avg.SSIM: {:.4f} ".format(avg_ssim))
             print("===> Avg.LPIPS: {:.4f} ".format(avg_lpips))
@@ -174,20 +227,36 @@ if __name__ == '__main__':
             print(psnr)
             print(ssim)
             print(lpips)
+
+            
+            with open(f"./results/training/metrics{now}.md", "w") as f:
+                f.write("dataset: "+ args.dataset + "\n")  
+                f.write(f"lr: {args.lr}\n")  
+                f.write(f"batch size: {args.batchSize}\n")  
+                f.write(f"crop size: {args.cropSize}\n")  
+                f.write(f"HVI_weight: {args.HVI_weight}\n")  
+                f.write(f"L1_weight: {args.L1_weight}\n")  
+                f.write(f"D_weight: {args.D_weight}\n")  
+                f.write(f"E_weight: {args.E_weight}\n")  
+                f.write(f"P_weight: {args.P_weight}\n")  
+                f.write("| Epochs | PSNR | SSIM | LP  IPS |\n")  
+                f.write("|----------------------|----------------------|----------------------|----------------------|\n")  
+                for i in range(len(psnr)):
+                    f.write(f"| {args.start_epoch+(i+1)*args.snapshots} | { psnr[i]:.4f} | {ssim[i]:.4f} | {lpips[i]:.4f} |\n")
+
         torch.cuda.empty_cache()
-    
-    now = datetime.now().strftime("%Y-%m-%d-%H%M%S")
-    with open(f"./results/training/metrics{now}.md", "w") as f:
-        f.write("dataset: "+ opt.dataset + "\n")  
-        f.write(f"lr: {opt.lr}\n")  
-        f.write(f"batch size: {opt.batchSize}\n")  
-        f.write(f"crop size: {opt.cropSize}\n")  
-        f.write(f"HVI_weight: {opt.HVI_weight}\n")  
-        f.write(f"L1_weight: {opt.L1_weight}\n")  
-        f.write(f"D_weight: {opt.D_weight}\n")  
-        f.write(f"E_weight: {opt.E_weight}\n")  
-        f.write(f"P_weight: {opt.P_weight}\n")  
-        f.write("| Epochs | PSNR | SSIM | LPIPS |\n")  
-        f.write("|----------------------|----------------------|----------------------|----------------------|\n")  
-        for i in range(len(psnr)):
-            f.write(f"| {opt.start_epoch+(i+1)*opt.snapshots} | { psnr[i]:.4f} | {ssim[i]:.4f} | {lpips[i]:.4f} |\n")
+
+if __name__ == '__main__':
+    args = option().parse_args()
+
+    if args.gpu_mode == False:
+        os.environ['CUDA_VISIBLE_DEVICES'] = ""
+
+    world_size = torch.cuda.device_count()
+    print(f"Detected {world_size} GPUs")
+
+    if world_size > 1:
+        import torch.multiprocessing as mp
+        mp.spawn(train, args=(args,), nprocs=world_size, join=True)
+    else:
+        train(None, args)

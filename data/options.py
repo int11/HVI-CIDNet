@@ -8,10 +8,10 @@ def option():
     division = 4
     parser.add_argument('--batchSize', type=int, default=int(8 / division), help='training batch size')
     parser.add_argument('--cropSize', type=int, default=400, help='image crop size (patch size)')
-    parser.add_argument('--nEpochs', type=int, default=1000, help='number of epochs to train for end')
+    parser.add_argument('--nEpochs', type=int, default=1500, help='number of epochs to train for end')
     parser.add_argument('--start_epoch', type=int, default=0, help='number of epochs to start, >0 is retrained a pre-trained pth')
-    parser.add_argument('--snapshots', type=int, default=1, help='Snapshots for save checkpoints pth')
-    parser.add_argument('--lr', type=float, default=1e-4 / division, help='Learning Rate')
+    parser.add_argument('--snapshots', type=int, default=10, help='Snapshots for save checkpoints pth')
+    parser.add_argument('--lr', type=float, default=1e-4, help='Learning Rate')
     parser.add_argument('--gpu_mode', type=bool, default=True)
     parser.add_argument('--shuffle', type=bool, default=True)
     parser.add_argument('--threads', type=int, default=0, help='number of threads for dataloader to use')
