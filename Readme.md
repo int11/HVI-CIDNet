@@ -480,6 +480,52 @@ If you have any questions, please contact us or submit an issue to the repositor
 Yixu Feng (yixu-nwpu@mail.nwpu.edu.cn)
 Cheng Zhang (zhangcheng233@mail.nwpu.edu.cn)
 
+## 4-1. 한국어 사용 가이드 / Korean Usage Guide 🇰🇷
+
+### 한국어 인터페이스 / Korean Interface
+
+이제 HVI-CIDNet을 한국어로 사용할 수 있습니다!
+
+#### 1. 한국어 Gradio 앱 실행 / Running Korean Gradio App
+```bash
+# 한국어 인터페이스로 데모 실행
+python app.py --lang ko
+
+# 영어 인터페이스 (기본값)
+python app.py --lang en
+```
+
+#### 2. 한국어 평가 도구 / Korean Evaluation Tool
+```bash
+# 한국어 도움말 보기
+python eval_ko.py --help
+
+# LOLv1 데이터셋 평가
+python eval_ko.py --lol
+
+# LOLv2-real 데이터셋 평가
+python eval_ko.py --lol_v2_real --best_GT_mean
+
+# 언페어드 데이터셋 평가 (DICM)
+python eval_ko.py --unpaired --DICM --unpaired_weights ./weights/LOLv2_syn/w_perc.pth --alpha 0.9
+```
+
+#### 3. 한국어 지원 기능 / Korean Support Features
+- 🖥️ Gradio 웹 인터페이스 한국어 번역
+- 📝 명령행 도구 한국어 도움말
+- 📖 한국어 사용 가이드 및 설명
+
+#### 4. 언어 전환 / Language Switching
+모든 도구는 `--lang ko` 또는 `--lang en` 옵션으로 언어를 선택할 수 있습니다.
+
+### English Interface
+
+You can still use HVI-CIDNet in English as before:
+```bash
+python app.py --lang en
+python eval.py --help
+```
+
 ## 5. Citation 🌕
 
 If you find our work useful for your research, please cite our paper
@@ -497,7 +543,7 @@ If you find our work useful for your research, please cite our paper
       author={Yixu Feng and Cheng Zhang and Pei Wang and Peng Wu and Qingsen Yan and Yanning Zhang},
       year={2024},
       eprint={2402.05809},
-      archivePrefix={arXiv},
+      archiveUID={arXiv},
       primaryClass={cs.CV}
 }
 ```

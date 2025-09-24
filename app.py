@@ -11,9 +11,57 @@ from loss.niqe_utils import *
 import platform
 import argparse
 
+# 한국어 지원을 위한 언어 설정
+TRANSLATIONS = {
+    'en': {
+        'title': "HVI-CIDNet (Low-Light Image Enhancement)",
+        'input_image': "Low-light Image",
+        'image_score': "Image Score",
+        'image_score_info': "Calculate NIQE and BRISQUE, default is \"No\".",
+        'model_weights': "Model Weights",
+        'model_weights_info': "Choose your model. The best models are \"SICE.pth\" and \"generalization.pth\".",
+        'gamma_curve': "gamma curve",
+        'gamma_curve_info': "Lower is lighter, and best range is [0.5,2.5].",
+        'alpha_s': "Alpha-s",
+        'alpha_s_info': "Higher is more saturated.",
+        'alpha_i': "Alpha-i", 
+        'alpha_i_info': "Higher is lighter.",
+        'result': "Result",
+        'niqe': "NIQE",
+        'niqe_info': "Lower is better.",
+        'brisque': "BRISQUE",
+        'brisque_info': "Lower is better."
+    },
+    'ko': {
+        'title': "HVI-CIDNet (저조도 이미지 향상)",
+        'input_image': "저조도 이미지",
+        'image_score': "이미지 점수",
+        'image_score_info': "NIQE와 BRISQUE 점수 계산, 기본값은 \"No\"입니다.",
+        'model_weights': "모델 가중치",
+        'model_weights_info': "모델을 선택하세요. 최고의 모델은 \"SICE.pth\"와 \"generalization.pth\"입니다.",
+        'gamma_curve': "감마 곡선",
+        'gamma_curve_info': "값이 낮을수록 더 밝아집니다. 최적 범위는 [0.5,2.5]입니다.",
+        'alpha_s': "알파-s",
+        'alpha_s_info': "값이 클수록 채도가 높아집니다.",
+        'alpha_i': "알파-i",
+        'alpha_i_info': "값이 클수록 더 밝아집니다.",
+        'result': "결과",
+        'niqe': "NIQE",
+        'niqe_info': "낮을수록 좋습니다.",
+        'brisque': "BRISQUE", 
+        'brisque_info': "낮을수록 좋습니다."
+    }
+}
+
 opt_parser = argparse.ArgumentParser(description='App')
 opt_parser.add_argument('--cpu', action='store_true', help='CPU-Only')
+opt_parser.add_argument('--lang', type=str, default='en', choices=['en', 'ko'], 
+                        help='언어 선택 / Language selection (en/ko)')
 opt = opt_parser.parse_args()
+
+# 선택된 언어의 번역 텍스트 가져오기
+lang = opt.lang
+texts = TRANSLATIONS[lang]
 
 if opt.cpu:
     eval_net = CIDNet().cpu()
@@ -85,19 +133,19 @@ pth_files2 = remove_weights_prefix(pth_files)
 interface = gr.Interface(
     fn=process_image,
     inputs=[
-        gr.Image(label="Low-light Image", type="pil"),
-        gr.Radio(choices=['Yes','No'],label="Image Score",info="Calculate NIQE and BRISQUE, default is \"No\"."),
-        gr.Radio(choices=pth_files2,label="Model Weights",info="Choose your model. The best models are \"SICE.pth\" and \"generalization.pth\"."),
-        gr.Slider(0.1,5,label="gamma curve",step=0.01,value=1.0, info="Lower is lighter, and best range is [0.5,2.5]."),
-        gr.Slider(0,2,label="Alpha-s",step=0.01,value=1.0, info="Higher is more saturated."),
-        gr.Slider(0.1,2,label="Alpha-i",step=0.01,value=1.0, info="Higher is lighter.")
+        gr.Image(label=texts['input_image'], type="pil"),
+        gr.Radio(choices=['Yes','No'], label=texts['image_score'], info=texts['image_score_info']),
+        gr.Radio(choices=pth_files2, label=texts['model_weights'], info=texts['model_weights_info']),
+        gr.Slider(0.1,5, label=texts['gamma_curve'], step=0.01, value=1.0, info=texts['gamma_curve_info']),
+        gr.Slider(0,2, label=texts['alpha_s'], step=0.01, value=1.0, info=texts['alpha_s_info']),
+        gr.Slider(0.1,2, label=texts['alpha_i'], step=0.01, value=1.0, info=texts['alpha_i_info'])
     ],
     outputs=[
-        gr.Image(label="Result", type="pil"),
-        gr.Textbox(label="NIQE",info="Lower is better."),
-        gr.Textbox(label="BRISQUE",info="Lower is better.")
+        gr.Image(label=texts['result'], type="pil"),
+        gr.Textbox(label=texts['niqe'], info=texts['niqe_info']),
+        gr.Textbox(label=texts['brisque'], info=texts['brisque_info'])
     ],
-    title="HVI-CIDNet (Low-Light Image Enhancement)",
+    title=texts['title'],
     allow_flagging="never"
 )
 
