@@ -123,7 +123,8 @@ def checkpoint(epoch, model, optimizer, path):
 
 def build_model():
     print('===> Building model ')
-    model = CIDNet()
+    # model = CIDNet()
+    model = CIDNet_sam()
     model = model.to(dist.get_device())
     return model
 

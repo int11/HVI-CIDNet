@@ -67,7 +67,7 @@ def metrics(im_list, label_list, use_GT_mean):
     n = 0
     loss_fn = lpips.LPIPS(net='alex')
     loss_fn.cuda()
-    for item, label_item in tqdm(list(zip(im_list, label_list))):
+    for item, label_item in list(zip(im_list, label_list)):
         n += 1
         
         # Handle different input types (PIL, numpy array, or file path)

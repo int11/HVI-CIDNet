@@ -98,17 +98,6 @@ class CIDNet(nn.Module, PyTorchModelHubMixin):
         
         self.trans = RGB_HVI()
         
-        # Alpha prediction layer for alpha_s and alpha_i
-        self.alpha_predictor = nn.Sequential(
-            nn.ReplicationPad2d(1),
-            nn.Conv2d(3, ch1, 3, stride=1, padding=0, bias=False),  # input channels = 3 (HVI)
-            nn.GroupNorm(1, ch1),
-            nn.SiLU(inplace=True),
-            nn.ReplicationPad2d(1),
-            nn.Conv2d(ch1, 2, 3, stride=1, padding=0, bias=False),  # output 2 channels for alpha_s and alpha_i
-        )
-
-
         if cidnet_model_path != None:
             print(f"Loading CIDNet model from: {cidnet_model_path}")
 
@@ -132,6 +121,16 @@ class CIDNet(nn.Module, PyTorchModelHubMixin):
             param.requires_grad = False
         
         # Add new trainable layers after freezing
+        # Alpha prediction layer for alpha_s and alpha_i
+        self.alpha_predictor = nn.Sequential(
+            nn.ReplicationPad2d(1),
+            nn.Conv2d(ch1*2, ch1, 3, stride=1, padding=0, bias=False),  # input channels = ch1*2 (i_dec1 + hv_1)
+            nn.GroupNorm(1, ch1),
+            nn.SiLU(inplace=True),
+            nn.ReplicationPad2d(1),
+            nn.Conv2d(ch1, 4, 3, stride=1, padding=0, bias=False),  # output 4 channels for alpha_s, alpha_r, alpha_g, alpha_b
+            nn.Sigmoid()  # 0~1 범위로 출력
+        )
 
 
     def forward(self, x):
@@ -177,6 +176,8 @@ class CIDNet(nn.Module, PyTorchModelHubMixin):
         i_dec1 = self.I_LCA6(i_dec2, hv_2)
         hv_1 = self.HV_LCA6(hv_2, i_dec2)
         
+        
+        
         i_dec1 = self.ID_block1(i_dec1, i_jump0)
         i_dec0 = self.ID_block0(i_dec1)
         hv_1 = self.HVD_block1(hv_1, hv_jump0)
@@ -184,13 +185,14 @@ class CIDNet(nn.Module, PyTorchModelHubMixin):
         
         output_hvi = torch.cat([hv_0, i_dec0], dim=1) + hvi
 
-        # Predict alpha_s and alpha_i values
-        alpha_maps = self.alpha_predictor(output_hvi)
-        # Sigmoid를 통과시켜 0~1 범위로 만든 후 원하는 범위로 스케일링
-        alpha_s = torch.sigmoid(alpha_maps[:, 0:1, :, :]) * 0.6 + 1.0  # 1.0~1.6
-        alpha_i = torch.sigmoid(alpha_maps[:, 1:2, :, :]) * 0.4 + 0.8  # 0.8~1.2
+        # Predict alpha_s, alpha_i
+        alpha_input = torch.cat([i_dec1, hv_1], dim=1)  # (batch, ch1*2, h, w)
+        alpha_maps = self.alpha_predictor(alpha_input)
+        # 원하는 범위로 스케일링
+        alpha_s = alpha_maps[:, 0, :, :] * 0.6 + 1.0  # 1.0~1.6
+        alpha_i = alpha_maps[:, 1:4, :, :] * 0.4 + 0.8  # (batch, 3, h, w) for R, G, B (0.8~1.2)
 
-        sam_output = self.sam(x)
+        # sam_output = self.sam(x)
 
         output_rgb = self.trans.HVI_to_RGB(output_hvi, alpha_s, alpha_i)
 
@@ -204,8 +206,8 @@ class CIDNet(nn.Module, PyTorchModelHubMixin):
 if __name__ == "__main__":
     model = CIDNet()
     model.eval()
-    dummy_input = torch.randn(1, 3, 256, 256)  # Example input tensor
+    dummy_input = torch.randn(2, 3, 400, 400)  # Example input tensor
     with torch.no_grad():
         output = model(dummy_input)
-    print(f"Output shape: {output.shape}")  # Should be (1, 3, 256, 256) for RGB output
+    print(f"Output shape: {output.shape}")  # Should be (2, 3, 400, 400) for RGB output
     print("Model loaded and tested successfully.")
