@@ -41,12 +41,13 @@ class CIDNet(nn.Module, PyTorchModelHubMixin):
                  norm=False,
                  cidnet_model_path="Fediory/HVI-CIDNet-LOLv1-woperc",
                  sam_model_path="Gourieff/ReActor/models/sams/sam_vit_b_01ec64.pth",
+                 alpha_predict=True
         ):
         super(CIDNet, self).__init__()
 
         [ch1, ch2, ch3, ch4] = channels
         [head1, head2, head3, head4] = heads
-        
+        self.alpha_predict = alpha_predict
         # HV_ways
         self.HVE_block0 = nn.Sequential(
             nn.ReplicationPad2d(1),
@@ -117,8 +118,8 @@ class CIDNet(nn.Module, PyTorchModelHubMixin):
             self.sam = load_sam_model(sam_model_path)
 
         # Freeze all loaded parameters (before adding new layers)
-        for param in self.parameters():
-            param.requires_grad = False
+        # for param in self.parameters():
+        #     param.requires_grad = False
         
         # Add new trainable layers after freezing
         # Alpha prediction layer for alpha_s and alpha_i
@@ -129,7 +130,7 @@ class CIDNet(nn.Module, PyTorchModelHubMixin):
             nn.SiLU(inplace=True),
             nn.ReplicationPad2d(1),
             nn.Conv2d(ch1, 4, 3, stride=1, padding=0, bias=False),  # output 4 channels for alpha_s, alpha_r, alpha_g, alpha_b
-            nn.Sigmoid()  # 0~1 범위로 출력
+            nn.Sigmoid()
         )
 
 
@@ -185,16 +186,29 @@ class CIDNet(nn.Module, PyTorchModelHubMixin):
         
         output_hvi = torch.cat([hv_0, i_dec0], dim=1) + hvi
 
+
+
+
         # Predict alpha_s, alpha_i
         alpha_input = torch.cat([i_dec1, hv_1], dim=1)  # (batch, ch1*2, h, w)
         alpha_maps = self.alpha_predictor(alpha_input)
-        # 원하는 범위로 스케일링
-        alpha_s = alpha_maps[:, 0, :, :] * 0.6 + 1.0  # 1.0~1.6
-        alpha_i = alpha_maps[:, 1:4, :, :] * 0.4 + 0.8  # (batch, 3, h, w) for R, G, B (0.8~1.2)
+
+        # [목표] Sigmoid 출력(0~1)을 스케일 범위(예: 0.8 ~ 1.2)로 변환합니다.
+        # 변환 공식: output * (max - min) + min
+        # scale_range_width = 1.2 - 0.8 = 0.4
+        # scale_min = 0.8
+        scale_factor = alpha_maps * 0.4 + 0.8  # 이제 scale_factor의 범위는 [0.8, 1.2]가 됩니다.
+
+        # 예측된 스케일 팩터를 각 기준 알파 값에 곱해줍니다.
+        alpha_s = 1.3 * scale_factor[:, 0, :, :]
+        alpha_i = 1.0 * scale_factor[:, 1:4, :, :]
+
 
         # sam_output = self.sam(x)
-
-        output_rgb = self.trans.HVI_to_RGB(output_hvi, alpha_s, alpha_i)
+        if self.alpha_predict:
+            output_rgb = self.trans.HVI_to_RGB(output_hvi, alpha_s, alpha_i)
+        else:
+            output_rgb = self.trans.HVI_to_RGB(output_hvi)
 
         return output_rgb
     

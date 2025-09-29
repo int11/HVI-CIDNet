@@ -226,7 +226,6 @@ def train(rank, args):
         psnr = []
         ssim = []
         lpips = []
-        print(eval(model, testing_data_loader, args, alpha_i=1, use_GT_mean=args.use_GT_mean))
 
         for epoch in range(start_epoch+1, args.nEpochs + start_epoch + 1):
             # Set epoch for distributed sampler

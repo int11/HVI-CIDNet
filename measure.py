@@ -65,7 +65,7 @@ def metrics(im_list, label_list, use_GT_mean):
     avg_ssim = 0
     avg_lpips = 0
     n = 0
-    loss_fn = lpips.LPIPS(net='alex')
+    loss_fn = lpips.LPIPS(net='alex', verbose=False)
     loss_fn.cuda()
     for item, label_item in list(zip(im_list, label_list)):
         n += 1

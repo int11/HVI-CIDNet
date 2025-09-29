@@ -1,23 +1,17 @@
 import os
 import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import torch
 import random
 from torchvision import transforms
 import torch.optim as optim
-import torch.backends.cudnn as cudnn
-import numpy as np
-from torch.utils.data import DataLoader
-from net.CIDNet import CIDNet
 from net.CIDNet_sam import CIDNet as CIDNet_sam
 from data.options import option, load_datasets
-from measure import metrics
-from eval import eval
+from sam.eval import eval
 from data.data import *
 from loss.losses import *
 from data.scheduler import *
-from tqdm import tqdm
 from datetime import datetime
-import glob
 import dist
 
 
@@ -123,7 +117,6 @@ def checkpoint(epoch, model, optimizer, path):
 
 def build_model():
     print('===> Building model ')
-    # model = CIDNet()
     model = CIDNet_sam()
     model = model.to(dist.get_device())
     return model
@@ -227,7 +220,7 @@ def train(rank, args):
         psnr = []
         ssim = []
         lpips = []
-        print(eval(model, testing_data_loader, args, alpha_i=1, use_GT_mean=args.use_GT_mean))
+        
 
         for epoch in range(start_epoch+1, args.nEpochs + start_epoch + 1):
             # Set epoch for distributed sampler
@@ -243,8 +236,11 @@ def train(rank, args):
             
             if epoch % args.snapshots == 0 and dist.is_main_process():
                 checkpoint(epoch, model, optimizer, f"./weights/train{now}")
-            
-                avg_psnr, avg_ssim, avg_lpips = eval(model, testing_data_loader, args, alpha_i=1, use_GT_mean=args.use_GT_mean)
+
+
+                print(eval(model, testing_data_loader, args, use_GT_mean=args.use_GT_mean, alpha_predict=False))
+
+                avg_psnr, avg_ssim, avg_lpips = eval(model, testing_data_loader, args, use_GT_mean=args.use_GT_mean, alpha_predict=True)
                 print("===> Evaluation - PSNR: {:.4f} dB || SSIM: {:.4f} || LPIPS: {:.4f}".format(avg_psnr, avg_ssim, avg_lpips))
                 psnr.append(avg_psnr)
                 ssim.append(avg_ssim)

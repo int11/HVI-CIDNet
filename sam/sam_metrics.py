@@ -20,9 +20,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.exceptions import ConvergenceWarning
 
 from scipy.stats import norm
-import matplotlib
-# matplotlib.use('Agg')  # GUI 없는 환경에서 사용 - 주석 처리하여 GUI 활성화
-import matplotlib.pyplot as plt
+
 
 import safetensors.torch as sf
 from huggingface_hub import hf_hub_download
