@@ -106,7 +106,7 @@ if __name__ == '__main__':
     eval_parser.add_argument('--MEF', action='store_true', help='output MEF dataset')
     eval_parser.add_argument('--NPE', action='store_true', help='output NPE dataset')
     eval_parser.add_argument('--VV', action='store_true', help='output VV dataset')
-    eval_parser.add_argument('--alpha', type=float, default=1.0)
+    eval_parser.add_argument('--alpha_i', type=float, default=1.0)
     eval_parser.add_argument('--unpaired_weights', type=str, default='./weights/LOLv2_syn/w_perc.pth')
 
     ep = eval_parser.parse_args()
@@ -120,7 +120,7 @@ if __name__ == '__main__':
     
     norm_size = True
     num_workers = 1
-    alpha = None
+    alpha_i = None
     if ep.lol:
         eval_data = DataLoader(dataset=get_eval_set("./datasets/LOLv1/eval15/low"), num_workers=num_workers, batch_size=1, shuffle=False)
         if ep.perc:
@@ -133,13 +133,13 @@ if __name__ == '__main__':
         eval_data = DataLoader(dataset=get_eval_set("./datasets/LOLv2/Real_captured/Test/Low"), num_workers=num_workers, batch_size=1, shuffle=False)
         if ep.best_GT_mean:
             weight_path = './weights/LOLv2_real/w_perc.pth'
-            alpha = 0.84
+            alpha_i = 0.84
         elif ep.best_PSNR:
             weight_path = './weights/LOLv2_real/best_PSNR.pth'
-            alpha = 0.8
+            alpha_i = 0.8
         elif ep.best_SSIM:
             weight_path = './weights/LOLv2_real/best_SSIM.pth'
-            alpha = 0.82
+            alpha_i = 0.82
             
     elif ep.lol_v2_syn:
         eval_data = DataLoader(dataset=get_eval_set("./datasets/LOLv2/Synthetic/Test/Low"), num_workers=num_workers, batch_size=1, shuffle=False)
@@ -169,11 +169,11 @@ if __name__ == '__main__':
             eval_data = DataLoader(dataset=get_SICE_eval_set("./datasets/VV"), num_workers=num_workers, batch_size=1, shuffle=False)
         elif ep.custome:
             eval_data = DataLoader(dataset=get_SICE_eval_set(ep.custome_path), num_workers=num_workers, batch_size=1, shuffle=False)
-        alpha = ep.alpha
+        alpha_i = ep.alpha_i
         norm_size = False
         weight_path = ep.unpaired_weights
         
     eval_net = CIDNet().cuda()
 
-    eval(eval_net, eval_data, weight_path, ep, alpha_i=alpha, use_GT_mean=True, unpaired=ep.unpaired)
+    eval(eval_net, eval_data, weight_path, ep, alpha_i=alpha_i, use_GT_mean=True, unpaired=ep.unpaired)
 

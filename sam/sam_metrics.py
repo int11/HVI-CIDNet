@@ -7,7 +7,7 @@ import warnings
 import torch
 import numpy as np
 import cv2
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 import torchvision.transforms as transforms
 
 from segment_anything import sam_model_registry, SamAutomaticMaskGenerator
@@ -26,7 +26,7 @@ import safetensors.torch as sf
 from huggingface_hub import hf_hub_download
 
 from net.CIDNet import CIDNet
-from measure import *
+from measure import metrics_one, calculate_psnr, calculate_ssim
 
 warnings.filterwarnings("ignore", category=ConvergenceWarning)
 
@@ -89,24 +89,7 @@ def load_sam_model(sam_model_path="Gourieff/ReActor/models/sams/sam_vit_b_01ec64
     return mask_generator
 
 
-def metrics_one(im1, im2, use_GT_mean, loss_fn):
-    if isinstance(im1, Image.Image):
-        im1 = np.array(im1)
-    if isinstance(im2, Image.Image):
-        im2 = np.array(im2)
 
-    if use_GT_mean:
-        mean_restored = cv2.cvtColor(im1, cv2.COLOR_RGB2GRAY).mean()
-        mean_target = cv2.cvtColor(im2, cv2.COLOR_RGB2GRAY).mean()
-        im1 = np.clip(im1 * (mean_target/mean_restored), 0, 255)
-    
-    score_psnr = calculate_psnr(im1, im2)
-    score_ssim = calculate_ssim(im1, im2)
-    ex_p0 = lpips.im2tensor(im1).cuda()
-    ex_ref = lpips.im2tensor(im2).cuda()
-    
-    score_lpips = loss_fn.forward(ex_ref, ex_p0)
-    return score_psnr, score_ssim, score_lpips
 
 
 def process_image_with_cidnet(model, image, alpha_s, alpha_i):
@@ -207,7 +190,7 @@ def determine_parameters(input_image, mask, gt_image, model, device, n_iteration
         # 마스크 영역에 대한 메트릭 계산
         # psnr_val = peak_signal_noise_ratio(enhanced_masked, gt_masked, data_range=255)
         # ssim_val = structural_similarity(enhanced_masked, gt_masked, channel_axis=2, data_range=255)
-        psnr_val, ssim_val, lpips_val  = metrics_one(enhanced_masked, gt_masked, use_GT_mean=True, loss_fn=loss_fn)
+        psnr_val, ssim_val, lpips_val  = metrics_one(enhanced_masked, gt_masked, use_GT_mean=args.use_GT_mean, loss_fn=loss_fn)
 
         # 파라미터가 적절한 범위에 있는지 확인
         param_score = 1.0
@@ -216,7 +199,7 @@ def determine_parameters(input_image, mask, gt_image, model, device, n_iteration
             param_score = 0.0
         
         # 최종 점수 계산 (PSNR, SSIM, 파라미터 범위 고려)
-        score = (psnr_val / 40.0 * 0.5 + ssim_val * 0.3 + param_score * 0.2)  
+        score = (psnr_val / 40.0 + ssim_val + param_score)  
         return score
 
     # 최적화 전(기본값) 점수 계산
@@ -333,11 +316,13 @@ def group_masks_by_stats(masks, num_groups=5):
     # 가중치 적용 (면적이 큰 마스크에 더 높은 가중치) 
     features = np.column_stack([area_norm])
     
-    kmeans = KMeans(n_clusters=num_groups, random_state=42, n_init=10)
+    # 클러스터 개수는 최소(마스크 개수, num_groups)
+    n_clusters = min(num_groups, len(features))
+    kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
     labels = kmeans.fit_predict(features)
     
     grouped_masks = []
-    for i in range(num_groups):
+    for i in range(n_clusters):
         group_masks = [m['mask'] for m, label in zip(mask_stats, labels) if label == i]
         if not group_masks:
             continue
@@ -452,12 +437,20 @@ def visualize_mask_groups(image, grouped_masks):
     # 메모리 정리는 자동으로 됨
 
 
+def sort_files_by_number(file_list):
+    """파일 리스트를 숫자 순서대로 정렬"""
+    import re
+    def extract_number(filename):
+        match = re.search(r'(\d+)', filename)
+        return int(match.group(1)) if match else 0
+    
+    return sorted(file_list, key=extract_number)
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description='Process images using CIDNet and SAM')
-    parser.add_argument('--input_dir', type=str, default="datasets/LOLdataset/eval15/low",
-                        help='Directory containing input images')
-    parser.add_argument('--gt_dir', type=str, default="datasets/LOLdataset/eval15/high",
-                        help='Directory containing ground truth images')
+    parser.add_argument('--dir', type=str, default="datasets/LOLdataset/our485",
+                        help='Base directory containing low/high subdirectories and for saving matrices')
     parser.add_argument('--output_dir', type=str, default="results/LOLdataset",
                         help='Directory to save output images')
     parser.add_argument('--cidnet_model', type=str, default="Fediory/HVI-CIDNet-LOLv1-woperc",
@@ -470,106 +463,123 @@ def parse_args():
                         help='Number of mask groups to create')
     parser.add_argument('--iterations', type=int, default=10,
                         help='Number of iterations for Bayesian optimization')
+    parser.add_argument('--use_GT_mean', action='store_true', default=True,
+                        help='Use the mean of GT to rectify the output of the model')
     return parser.parse_args()
 
 
 if __name__ == "__main__":
-    args = parse_args()
-    
-    # Add device detection
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"Using device: {device}")
-
-    # Create output directory
-    os.makedirs(args.output_dir, exist_ok=True)
-    
-    # Create subdirectories for different outputs
-    whole_dir = os.path.join(args.output_dir, "whole")
-    sam_dir = os.path.join(args.output_dir, "sam")
-    comparison_dir = os.path.join(args.output_dir, "comparison")
-    
-    os.makedirs(whole_dir, exist_ok=True)
-    os.makedirs(sam_dir, exist_ok=True)
-    os.makedirs(comparison_dir, exist_ok=True)
-    
-    # Get list of PNG files from input directory
-    input_files = [f for f in os.listdir(args.input_dir) if f.lower().endswith('.png')]
-    
-    # Load models only once
-    cidnet_model = load_cidnet_model(args.cidnet_model)
-    sam_model = load_sam_model(args.sam_model)
-    # Calculate metrics for both whole and SAM enhanced images
-    loss_fn = lpips.LPIPS(net='alex')
-    loss_fn.cuda()
-    
-    # Process each image
-    whole_metrics = {'psnr': [], 'ssim': [], 'lpips': []}
-    sam_metrics = {'psnr': [], 'ssim': [], 'lpips': []}
-    
-    for input_file in input_files:
-        print(f"Processing {input_file}...")
-        input_filename = os.path.splitext(os.path.basename(input_file))[0]
+    from train import Tee
+    with Tee(os.path.join(f'./sam/log.txt')):
+        args = parse_args()
         
-        # Load input and ground truth images
-        input_path = os.path.join(args.input_dir, input_file)
-        gt_path = os.path.join(args.gt_dir, input_file)
+        # Add device detection
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        print(f"Using device: {device}")
         
-        input_image = Image.open(input_path).convert('RGB')
-        gt_image = Image.open(gt_path).convert('RGB')
+        # Set up directories based on --dir argument
+        input_dir = os.path.join(args.dir, "low")
+        gt_dir = os.path.join(args.dir, "high")
+        matrix_dir_base = args.dir
         
-        # 1. 통으로 CIDNet 처리
-        whole_enhanced = process_image_with_cidnet(cidnet_model, input_image, 1.3, 1.0)
-        whole_output_path = os.path.join(whole_dir, f"{input_filename}.png")
-        whole_enhanced.save(whole_output_path)
+        # Create subdirectories for different outputs
+        comparison_dir = os.path.join(args.output_dir, "comparison")
+        os.makedirs(comparison_dir, exist_ok=True)
         
-        # Calculate metrics for whole enhanced image
-        whole_psnr, whole_ssim, whole_lpips = metrics_one(whole_enhanced, gt_image, use_GT_mean=True, loss_fn=loss_fn)
-        whole_metrics['psnr'].append(whole_psnr)
-        whole_metrics['ssim'].append(whole_ssim)
-        whole_metrics['lpips'].append(whole_lpips.item())
-
-
-        # 2. 영역별 CIDNet 처리
-        initial_masks = sam_model.generate(np.array(input_image))
-
-        # 마스크 그룹핑
-        grouped_masks = group_masks_by_stats(
-            initial_masks, num_groups=args.num_groups
-        )
-
-        if args.visualize_masks:
-            visualize_mask_groups(input_image, grouped_masks)
-
-        # 파라미터 매트릭스 생성
-        alpha_s_matrix, alpha_i_matrix = create_parameter_matrices(
-            input_image, grouped_masks, gt_image, cidnet_model, device, n_iterations=args.iterations
-        )
-
-        output_image = process_image_with_cidnet(cidnet_model, input_image, alpha_s_matrix, alpha_i_matrix)
-        output_path = os.path.join(sam_dir, f"{input_filename}.png")
-        output_image.save(output_path)
+        # Get list of PNG files from input directory and sort by number
+        input_files = [f for f in os.listdir(input_dir) if f.lower().endswith('.png')]
+        input_files = sort_files_by_number(input_files)
         
-        # Calculate metrics for SAM enhanced image
-        sam_psnr, sam_ssim, sam_lpips = metrics_one(output_image, gt_image, use_GT_mean=True, loss_fn=loss_fn)
-        sam_metrics['psnr'].append(sam_psnr)
-        sam_metrics['ssim'].append(sam_ssim)
-        sam_metrics['lpips'].append(sam_lpips.item())
+        # Load models only once
+        cidnet_model = load_cidnet_model(args.cidnet_model)
+        sam_model = load_sam_model(args.sam_model)
+        # Calculate metrics for both whole and SAM enhanced images
+        loss_fn = lpips.LPIPS(net='alex')
+        loss_fn.cuda()
         
-        # 3. 결과 비교를 위한 시각화
-        comparison = Image.new('RGB', (input_image.width * 3, input_image.height))
-        comparison.paste(input_image, (0, 0))
-        comparison.paste(whole_enhanced, (input_image.width, 0))
-        comparison.paste(output_image, (input_image.width * 2, 0))
-        comparison_path = os.path.join(comparison_dir, f"{input_filename}.png")
-        comparison.save(comparison_path)
-    
-    # Calculate and print average metrics
-    print("\n=== Reimplementation of paper SOTA ===")
-    print(f"Average PSNR: {np.mean(whole_metrics['psnr']):.4f} dB")
-    print(f"Average SSIM: {np.mean(whole_metrics['ssim']):.4f}")
-    print(f"Average LPIPS: {np.mean(whole_metrics['lpips']):.4f}")
-    
-    print("\n=== SAM Enhanced Image Metrics ===")
-    print(f"Average PSNR: {np.mean(sam_metrics['psnr']):.4f} dB")
-    print(f"Average SSIM: {np.mean(sam_metrics['ssim']):.4f}")
-    print(f"Average LPIPS: {np.mean(sam_metrics['lpips']):.4f}")
+        # Process each image
+        whole_metrics = {'psnr': [], 'ssim': [], 'lpips': []}
+        sam_metrics = {'psnr': [], 'ssim': [], 'lpips': []}
+        
+        for input_file in input_files:
+            print(f"Processing {input_file}...")
+            input_filename = os.path.splitext(os.path.basename(input_file))[0]
+            
+            # Load input and ground truth images
+            input_path = os.path.join(input_dir, input_file)
+            gt_path = os.path.join(gt_dir, input_file)
+            
+            input_image = Image.open(input_path).convert('RGB')
+            gt_image = Image.open(gt_path).convert('RGB')
+            
+            # 1. 통으로 CIDNet 처리
+            whole_enhanced = process_image_with_cidnet(cidnet_model, input_image, 1.3, 1.0)
+            whole_psnr, whole_ssim, whole_lpips = metrics_one(whole_enhanced, gt_image, use_GT_mean=args.use_GT_mean, loss_fn=loss_fn)
+            whole_metrics['psnr'].append(whole_psnr)
+            whole_metrics['ssim'].append(whole_ssim)
+            whole_metrics['lpips'].append(whole_lpips.item())
+
+            # 1.5. 기본 파라미터로 통으로 CIDNet 처리
+            default_enhanced = process_image_with_cidnet(cidnet_model, input_image, 1.0, 1.0)
+            default_psnr, default_ssim, default_lpips = metrics_one(default_enhanced, gt_image, use_GT_mean=args.use_GT_mean, loss_fn=loss_fn)
+
+
+            # 2. 영역별 CIDNet 처리
+            initial_masks = sam_model.generate(np.array(input_image))
+
+            # 마스크 그룹핑
+            grouped_masks = group_masks_by_stats(
+                initial_masks, num_groups=args.num_groups
+            )
+
+            if args.visualize_masks:
+                visualize_mask_groups(input_image, grouped_masks)
+
+            # 파라미터 매트릭스 생성
+            alpha_s_matrix, alpha_i_matrix = create_parameter_matrices(
+                input_image, grouped_masks, gt_image, cidnet_model, device, n_iterations=args.iterations
+            )
+            matrix_dir = f"{matrix_dir_base}/iter{args.iterations}_num_groups{args.num_groups}"
+            os.makedirs(matrix_dir, exist_ok=True)
+            torch.save({
+                'alpha_s': alpha_s_matrix,
+                'alpha_i': alpha_i_matrix
+            }, os.path.join(matrix_dir, f"{input_filename}.pth"))
+
+            output_image = process_image_with_cidnet(cidnet_model, input_image, alpha_s_matrix, alpha_i_matrix)
+            
+            # Calculate metrics for SAM enhanced image
+            sam_psnr, sam_ssim, sam_lpips = metrics_one(output_image, gt_image, use_GT_mean=args.use_GT_mean, loss_fn=loss_fn)
+            sam_metrics['psnr'].append(sam_psnr)
+            sam_metrics['ssim'].append(sam_ssim)
+            sam_metrics['lpips'].append(sam_lpips.item())
+            
+            # 3. 결과 비교를 위한 시각화
+            print(f"  Whole(1.3,1.0) - PSNR: {whole_psnr:.4f}, SSIM: {whole_ssim:.4f}, LPIPS: {whole_lpips.item():.4f}"
+                  f" | Default(1.0,1.0) - PSNR: {default_psnr:.4f}, SSIM: {default_ssim:.4f}, LPIPS: {default_lpips.item():.4f}"
+                  f" | SAM Enhanced - PSNR: {sam_psnr:.4f}, SSIM: {sam_ssim:.4f}, LPIPS: {sam_lpips.item():.4f}")
+            comparison = Image.new('RGB', (input_image.width * 4, input_image.height + 50))
+            comparison.paste(input_image, (0, 0))
+            comparison.paste(gt_image, (input_image.width, 0))
+            comparison.paste(whole_enhanced, (input_image.width * 2, 0))
+            comparison.paste(output_image, (input_image.width * 3, 0))
+            draw = ImageDraw.Draw(comparison)
+            font = ImageFont.load_default()
+            draw.text((input_image.width//2 - 20, input_image.height + 10), "Input", fill="white", font=font)
+            draw.text((input_image.width + input_image.width//2 - 15, input_image.height + 10), "GT", fill="white", font=font)
+            draw.text((input_image.width*2 + input_image.width//2 - 25, input_image.height + 10), "Whole", fill="white", font=font)
+            draw.text((input_image.width*3 + input_image.width//2 - 20, input_image.height + 10), "SAM", fill="white", font=font)
+            
+            comparison_path = os.path.join(comparison_dir, f"{input_filename}.png")
+            comparison.save(comparison_path)
+        
+        # Calculate and print average metrics
+        print("\n=== Reimplementation of paper SOTA ===")
+        print(f"Average PSNR: {np.mean(whole_metrics['psnr']):.4f} dB")
+        print(f"Average SSIM: {np.mean(whole_metrics['ssim']):.4f}")
+        print(f"Average LPIPS: {np.mean(whole_metrics['lpips']):.4f}")
+        
+        print("\n=== SAM Enhanced Image Metrics ===")
+        print(f"Average PSNR: {np.mean(sam_metrics['psnr']):.4f} dB")
+        print(f"Average SSIM: {np.mean(sam_metrics['ssim']):.4f}")
+        print(f"Average LPIPS: {np.mean(sam_metrics['lpips']):.4f}")

@@ -238,9 +238,9 @@ def train(rank, args):
                 checkpoint(epoch, model, optimizer, f"./weights/train{now}")
 
 
-                print(eval(model, testing_data_loader, args, use_GT_mean=args.use_GT_mean, alpha_predict=False))
+                print(eval(model, testing_data_loader, use_GT_mean=args.use_GT_mean, alpha_predict=False))
 
-                avg_psnr, avg_ssim, avg_lpips = eval(model, testing_data_loader, args, use_GT_mean=args.use_GT_mean, alpha_predict=True)
+                avg_psnr, avg_ssim, avg_lpips = eval(model, testing_data_loader, use_GT_mean=args.use_GT_mean, alpha_predict=True)
                 print("===> Evaluation - PSNR: {:.4f} dB || SSIM: {:.4f} || LPIPS: {:.4f}".format(avg_psnr, avg_ssim, avg_lpips))
                 psnr.append(avg_psnr)
                 ssim.append(avg_ssim)

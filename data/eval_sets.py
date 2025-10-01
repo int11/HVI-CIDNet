@@ -1,4 +1,3 @@
-
 import os
 import torch.utils.data as data
 from os import listdir
@@ -35,18 +34,23 @@ class SICEDatasetFromFolderEval(data.Dataset):
 class DatasetFromFolderEval(data.Dataset):
     def __init__(self, data_dir, transform=None):
         super(DatasetFromFolderEval, self).__init__()
-        data_filenames = [join(data_dir, x) for x in listdir(data_dir) if is_image_file(x)]
-        data_filenames.sort()
-        self.data_filenames = data_filenames
+        # low/high 폴더 모두 읽기
+        low_dir = os.path.join(data_dir, 'low')
+        high_dir = os.path.join(data_dir, 'high')
+        low_files = [f for f in listdir(low_dir) if is_image_file(f)]
+        low_files.sort()
+        self.low_paths = [os.path.join(low_dir, f) for f in low_files]
+        self.high_paths = [os.path.join(high_dir, f) for f in low_files]  # low와 파일명 맞춤
         self.transform = transform
 
     def __getitem__(self, index):
-        input = load_img(self.data_filenames[index])
-        _, file = os.path.split(self.data_filenames[index])
-
+        input = load_img(self.low_paths[index])
+        gt = load_img(self.high_paths[index])
+        _, file = os.path.split(self.low_paths[index])
         if self.transform:
             input = self.transform(input)
-        return input, file
+            gt = self.transform(gt)
+        return input, gt, file
 
     def __len__(self):
-        return len(self.data_filenames)
+        return len(self.low_paths)

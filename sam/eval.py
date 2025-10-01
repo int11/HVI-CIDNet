@@ -10,7 +10,7 @@ from data.options import option, load_datasets
 from net.CIDNet_sam import CIDNet as CIDNet_sam
 
 
-def eval(model, testing_data_loader, opt, use_GT_mean=False, alpha_predict=True):
+def eval(model, testing_data_loader, use_GT_mean=False, alpha_predict=True):
     torch.set_grad_enabled(False)
     
     model = dist.de_parallel(model)
@@ -18,52 +18,22 @@ def eval(model, testing_data_loader, opt, use_GT_mean=False, alpha_predict=True)
     model.alpha_predict = alpha_predict
     
     model.eval()
-    
-    # opt에서 필요한 값들 가져오기
-    LOL = (opt.dataset == 'lol_v1')
-    v2 = (opt.dataset == 'lolv2_real')
-    norm_size = not (opt.dataset in ['SICE_mix', 'SICE_grad'])
-    
-    # label_dir 설정
-    label_dir_dict = {
-        'lol_v1': opt.data_valgt_lol_v1,
-        'lolv2_real': opt.data_valgt_lolv2_real,
-        'lolv2_syn': opt.data_valgt_lolv2_syn,
-        'lol_blur': opt.data_valgt_lol_blur,
-        'SID': opt.data_valgt_SID,
-        'SICE_mix': opt.data_valgt_SICE_mix,
-        'SICE_grad': opt.data_valgt_SICE_grad
-    }
-    label_dir = label_dir_dict.get(opt.dataset, None)
-    
+
     output_list = []  # 출력 이미지 저장용 리스트
     gt_list = []   # 라벨 이미지 저장용 리스트
-    
+
     for batch in testing_data_loader:
         with torch.no_grad():
-            if norm_size:
-                input, name = batch[0], batch[1]
-            else:
-                input, name, h, w = batch[0], batch[1], batch[2], batch[3]
-            
+            input, gt, name = batch[0], batch[1], batch[2]
             input = input.cuda()
-            output = model(input) 
-            
+            output = model(input)
         output = torch.clamp(output.cuda(),0,1).cuda()
-        if not norm_size:
-            output = output[:, :, :h, :w]
-        
-        # Convert tensor to numpy array for metrics
         output_np = output.squeeze(0).cpu().numpy().transpose(1, 2, 0)
         output_list.append(output_np)
-        
-        # Load corresponding ground truth image
-        gt_path = os.path.join(label_dir, name[0])
-        if os.path.exists(gt_path):
-            from PIL import Image
-            gt_img = Image.open(gt_path).convert('RGB')
-            gt_list.append(gt_img)
-        
+        # gt는 tensor이므로 PIL로 변환
+        from torchvision.transforms import ToPILImage
+        gt_img = ToPILImage()(gt.squeeze(0).cpu())
+        gt_list.append(gt_img)
         torch.cuda.empty_cache()
     
     # metrics 계산 및 반환
@@ -90,4 +60,4 @@ if __name__ == '__main__':
     print(f"Loaded checkpoint from {args.weight_path}")
 
 
-    print(eval(eval_net, testing_data_loader, args, use_GT_mean=True, alpha_predict=False))
+    print(eval(eval_net, testing_data_loader, use_GT_mean=True, alpha_predict=False))

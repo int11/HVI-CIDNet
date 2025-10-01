@@ -90,18 +90,8 @@ def metrics(im_list, label_list, use_GT_mean):
         im1 = np.array(im1) 
         im2 = np.array(im2)
         
-        if use_GT_mean:
-            mean_restored = cv2.cvtColor(im1, cv2.COLOR_RGB2GRAY).mean()
-            mean_target = cv2.cvtColor(im2, cv2.COLOR_RGB2GRAY).mean()
-            im1 = np.clip(im1 * (mean_target/mean_restored), 0, 255)
-        
-        score_psnr = calculate_psnr(im1, im2)
-        score_ssim = calculate_ssim(im1, im2)
-        ex_p0 = lpips.im2tensor(im1).cuda()
-        ex_ref = lpips.im2tensor(im2).cuda()
-        
-
-        score_lpips = loss_fn.forward(ex_ref, ex_p0)
+        # Use metrics_one function
+        score_psnr, score_ssim, score_lpips = metrics_one(im1, im2, use_GT_mean, loss_fn)
     
         avg_psnr += score_psnr
         avg_ssim += score_ssim
@@ -113,6 +103,25 @@ def metrics(im_list, label_list, use_GT_mean):
     avg_ssim = avg_ssim / n
     avg_lpips = avg_lpips / n
     return avg_psnr, avg_ssim, avg_lpips
+
+def metrics_one(im1, im2, use_GT_mean, loss_fn):
+    if isinstance(im1, Image.Image):
+        im1 = np.array(im1)
+    if isinstance(im2, Image.Image):
+        im2 = np.array(im2)
+
+    if use_GT_mean:
+        mean_restored = cv2.cvtColor(im1, cv2.COLOR_RGB2GRAY).mean()
+        mean_target = cv2.cvtColor(im2, cv2.COLOR_RGB2GRAY).mean()
+        im1 = np.clip(im1 * (mean_target/mean_restored), 0, 255)
+    
+    score_psnr = calculate_psnr(im1, im2)
+    score_ssim = calculate_ssim(im1, im2)
+    ex_p0 = lpips.im2tensor(im1).cuda()
+    ex_ref = lpips.im2tensor(im2).cuda()
+    
+    score_lpips = loss_fn.forward(ex_ref, ex_p0)
+    return score_psnr, score_ssim, score_lpips
 
 
 if __name__ == '__main__':
