@@ -48,11 +48,10 @@ class Tee:
         self.file.close()
 
 
-def train_one_epoch(epoch, model, optimizer, training_data_loader, args, L1_loss, P_loss, E_loss, D_loss):
+def train_one_epoch(model, optimizer, training_data_loader, args, L1_loss, P_loss, E_loss, D_loss):
     model.train()
     total_loss = 0  # 전체 에폭의 손실 합계
     total_batches = 0  # 전체 배치 수
-    train_len = len(training_data_loader)
     torch.autograd.set_detect_anomaly(args.grad_detect)
     
     for batch_idx, batch in enumerate(training_data_loader, 1):
@@ -232,7 +231,7 @@ def train(rank, args):
             if dist.is_dist_available_and_initialized():
                 training_data_loader.sampler.set_epoch(epoch)
                 
-            epoch_loss, batch_count = train_one_epoch(epoch, model, optimizer, training_data_loader, args, L1_loss, P_loss, E_loss, D_loss)
+            epoch_loss, batch_count = train_one_epoch(model, optimizer, training_data_loader, args, L1_loss, P_loss, E_loss, D_loss)
             scheduler.step()
             # Log basic epoch info for all processes
             avg_loss = epoch_loss / batch_count
