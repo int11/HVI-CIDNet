@@ -42,7 +42,7 @@ class RGB_HVI(nn.Module):
         xyz = torch.cat([H, V, I],dim=1)
         return xyz
 
-    def HVI_to_RGB(self, img, alpha_s=1.3, alpha_i=1.0):
+    def HVI_to_RGB(self, img, alpha_s=1.0, alpha_i=1.0):
         eps = 1e-8
         H,V,I = img[:,0,:,:],img[:,1,:,:],img[:,2,:,:]
         

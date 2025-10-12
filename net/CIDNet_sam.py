@@ -10,7 +10,7 @@ import safetensors.torch as sf
 
 
 class AlphaPredictor(nn.Module):
-    def __init__(self, in_channels):
+    def __init__(self, in_channels, max_scale_factor=1.2):
         super(AlphaPredictor, self).__init__()
         self.predictor = nn.Sequential(
             nn.ReplicationPad2d(1),
@@ -21,17 +21,23 @@ class AlphaPredictor(nn.Module):
             nn.Conv2d(in_channels // 2, 1, 3, stride=1, padding=0, bias=False),
             nn.Sigmoid()
         )
+        self.max_scale_factor = max_scale_factor  # 최대 스케일 배수 (예: 2.0이면 0.5~2.0 범위)
 
-    def forward(self, x):
+    def forward(self, x, base_alpha_s=1.0, base_alpha_i=1.0):
         alpha_maps = self.predictor(x)
-        # [목표] Sigmoid 출력(0~1)을 스케일 범위(예: 0.8 ~ 1.2)로 변환합니다.
-        # 변환 공식: output * (max - min) + min
-        # scale_range_width = 1.2 - 0.8 = 0.4
-        # scale_min = 0.8
-        scale_factor = alpha_maps * 0.4 + 0.8  # 이제 scale_factor의 범위는 [0.8, 1.2]가 됩니다.
+
+        # [목표] Sigmoid 출력(0~1)을 동적 스케일 범위로 변환합니다.
+        # max_scale_factor = 2.0이면 범위는 [0.5, 2.0]
+        # max_scale_factor = 1.5이면 범위는 [0.67, 1.5] (1/1.5 = 0.67)
+        scale_min = 1.0 / self.max_scale_factor
+        scale_max = self.max_scale_factor
+        scale_range = scale_max - scale_min
+        scale_factor = alpha_maps * scale_range + scale_min
+
         # 예측된 스케일 팩터를 각 기준 알파 값에 곱해줍니다.
-        alpha_s = 1.3 * scale_factor.squeeze(1)  # (batch, h, w)
-        return alpha_s
+        alpha_s = base_alpha_s * scale_factor[:, 0, :, :]
+        alpha_i = base_alpha_i * scale_factor[:, 1:4, :, :]
+        return alpha_s, alpha_i  # alpha_s: (batch, 1, h, w), alpha_i: (batch, 3, h, w)
 
 
 def load_sam_model(model_path="Gourieff/ReActor/models/sams/sam_vit_b_01ec64.pth", device="cuda"):
@@ -66,13 +72,13 @@ class CIDNet(nn.Module, PyTorchModelHubMixin):
                  norm=False,
                  cidnet_model_path="Fediory/HVI-CIDNet-LOLv1-woperc",
                  sam_model_path="Gourieff/ReActor/models/sams/sam_vit_b_01ec64.pth",
-                 alpha_predict=True
+                 max_scale_factor=1.2
         ):
         super(CIDNet, self).__init__()
 
         [ch1, ch2, ch3, ch4] = channels
         [head1, head2, head3, head4] = heads
-        self.alpha_predict = alpha_predict
+        self.max_scale_factor = max_scale_factor
         # HV_ways
         self.HVE_block0 = nn.Sequential(
             nn.ReplicationPad2d(1),
@@ -146,12 +152,11 @@ class CIDNet(nn.Module, PyTorchModelHubMixin):
         # for param in self.parameters():
         #     param.requires_grad = False
         
-        # Add new trainable layers after freezing
-        # Alpha prediction layer for alpha_s and alpha_i
 
-    
+        self.alpha_predictor = AlphaPredictor(in_channels=ch2*2, max_scale_factor=self.max_scale_factor)
 
-    def forward(self, x, alpha_s=None, alpha_i=None):
+
+    def forward(self, x, alpha_predict=True, base_alpha_s=1.0, base_alpha_i=1.0):
         dtypes = x.dtype
         hvi = self.trans.RGB_to_HVI(x)
         i = hvi[:,2,:,:].unsqueeze(1).to(dtypes)
@@ -204,13 +209,14 @@ class CIDNet(nn.Module, PyTorchModelHubMixin):
         output_hvi = torch.cat([hv_0, i_dec0], dim=1) + hvi
 
 
-        # Predict alpha_s, alpha_i
-        alpha_input = torch.cat([i_dec1, hv_1], dim=1)  # (batch, ch1*2, h, w)
+        if alpha_predict:
+            alpha_input = torch.cat([i_dec1, hv_1], dim=1)  # (batch, ch1*2, h, w)
+            alpha_s, alpha_i = self.alpha_predictor(alpha_input, base_alpha_s, base_alpha_i)
+            output_rgb = self.trans.HVI_to_RGB(output_hvi, alpha_s, alpha_i)
+        else:
+            output_rgb = self.trans.HVI_to_RGB(output_hvi, base_alpha_s, base_alpha_i)
 
-
-        output_rgb = self.trans.HVI_to_RGB(output_hvi, alpha_s, alpha_i)
-
-        return output_rgb, alpha_input
+        return output_rgb
     
     def RGB_to_HVI(self,x):
         hvi = self.trans.RGB_to_HVI(x)

@@ -16,7 +16,7 @@ import dist
 from sam.utils import Tee, checkpoint
 
 
-def train_one_epoch(epoch, model, optimizer, training_data_loader, args, L1_loss, P_loss, E_loss, D_loss):
+def train_one_epoch(model, optimizer, training_data_loader, args, L1_loss, P_loss, E_loss, D_loss):
     model.train()
     total_loss = 0  # 전체 에폭의 손실 합계
     total_batches = 0  # 전체 배치 수
@@ -140,6 +140,7 @@ def init_loss(args):
     P_loss = PerceptualLoss({'conv1_2': 1, 'conv2_2': 1,'conv3_4': 1,'conv4_4': 1}, perceptual_weight = P_weight ,criterion='mse').to(device)
     return L1_loss,P_loss,E_loss,D_loss
 
+
 def train(rank, args):
     if rank is not None:
         dist.init_distributed(rank)
@@ -179,13 +180,26 @@ def train(rank, args):
         ssim = []
         lpips = []
         
+        def eval_and_log(use_GT_mean=False):
+            avg_psnr, avg_ssim, avg_lpips = eval(model, testing_data_loader, use_GT_mean=use_GT_mean, alpha_predict=False, base_alpha_s=1.3, base_alpha_i=1.0)
+            print("===> Evaluation (alpha_predict=False, base_alpha_s=1.3, base_alpha_i=1.0) - PSNR: {:.4f} dB || SSIM: {:.4f} || LPIPS: {:.4f}".format(avg_psnr, avg_ssim, avg_lpips))
+            avg_psnr, avg_ssim, avg_lpips = eval(model, testing_data_loader, use_GT_mean=use_GT_mean, alpha_predict=False, base_alpha_s=1.0, base_alpha_i=1.0)
+            print("===> Evaluation (alpha_predict=False, base_alpha_s=1.0, base_alpha_i=1.0) - PSNR: {:.4f} dB || SSIM: {:.4f} || LPIPS: {:.4f}".format(avg_psnr, avg_ssim, avg_lpips))
+            avg_psnr, avg_ssim, avg_lpips = eval(model, testing_data_loader, use_GT_mean=use_GT_mean, alpha_predict=True, base_alpha_s=1.3, base_alpha_i=1.0)
+            print("===> Evaluation (alpha_predict=True, base_alpha_s=1.3, base_alpha_i=1.0) - PSNR: {:.4f} dB || SSIM: {:.4f} || LPIPS: {:.4f}".format(avg_psnr, avg_ssim, avg_lpips))
+            avg_psnr, avg_ssim, avg_lpips = eval(model, testing_data_loader, use_GT_mean=use_GT_mean, alpha_predict=True, base_alpha_s=1.0, base_alpha_i=1.0)
+            print("===> Evaluation (alpha_predict=True, base_alpha_s=1.0, base_alpha_i=1.0) - PSNR: {:.4f} dB || SSIM: {:.4f} || LPIPS: {:.4f}".format(avg_psnr, avg_ssim, avg_lpips))
+            return avg_psnr, avg_ssim, avg_lpips
+        
+        eval_and_log(False)
+        eval_and_log(True)
 
         for epoch in range(start_epoch+1, args.nEpochs + start_epoch + 1):
             # Set epoch for distributed sampler
             if dist.is_dist_available_and_initialized():
                 training_data_loader.sampler.set_epoch(epoch)
                 
-            epoch_loss, batch_count = train_one_epoch(epoch, model, optimizer, training_data_loader, args, L1_loss, P_loss, E_loss, D_loss)
+            epoch_loss, batch_count = train_one_epoch(model, optimizer, training_data_loader, args, L1_loss, P_loss, E_loss, D_loss)
             scheduler.step()
             # Log basic epoch info for all processes
             avg_loss = epoch_loss / batch_count
@@ -195,11 +209,9 @@ def train(rank, args):
             if epoch % args.snapshots == 0 and dist.is_main_process():
                 checkpoint(epoch, model, optimizer, f"./weights/train{now}")
 
-
-                print(eval(model, testing_data_loader, use_GT_mean=args.use_GT_mean, alpha_predict=False))
-
-                avg_psnr, avg_ssim, avg_lpips = eval(model, testing_data_loader, use_GT_mean=args.use_GT_mean, alpha_predict=True)
-                print("===> Evaluation - PSNR: {:.4f} dB || SSIM: {:.4f} || LPIPS: {:.4f}".format(avg_psnr, avg_ssim, avg_lpips))
+                eval_and_log(False)
+                avg_psnr, avg_ssim, avg_lpips = eval_and_log(True)
+                
                 psnr.append(avg_psnr)
                 ssim.append(avg_ssim)
                 lpips.append(avg_lpips)

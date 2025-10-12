@@ -10,13 +10,10 @@ from data.options import option, load_datasets
 from net.CIDNet_sam import CIDNet as CIDNet_sam
 
 
-def eval(model, testing_data_loader, use_GT_mean=False, alpha_predict=True):
+def eval(model, testing_data_loader, use_GT_mean=False, alpha_predict=True, base_alpha_s=1.0, base_alpha_i=1.0):
     torch.set_grad_enabled(False)
     
     model = dist.de_parallel(model)
-    temp_alpha_predict = model.alpha_predict
-    model.alpha_predict = alpha_predict
-    
     model.eval()
 
     output_list = []  # 출력 이미지 저장용 리스트
@@ -26,7 +23,7 @@ def eval(model, testing_data_loader, use_GT_mean=False, alpha_predict=True):
         with torch.no_grad():
             input, gt, name = batch[0], batch[1], batch[2]
             input = input.cuda()
-            output = model(input)
+            output = model(input, alpha_predict=alpha_predict, base_alpha_s=base_alpha_s, base_alpha_i=base_alpha_i)
         output = torch.clamp(output.cuda(),0,1).cuda()
         output_np = output.squeeze(0).cpu().numpy().transpose(1, 2, 0)
         output_list.append(output_np)
@@ -41,7 +38,7 @@ def eval(model, testing_data_loader, use_GT_mean=False, alpha_predict=True):
     
     
     torch.set_grad_enabled(True)
-    model.alpha_predict = temp_alpha_predict
+
     return avg_psnr, avg_ssim, avg_lpips
     
 if __name__ == '__main__':

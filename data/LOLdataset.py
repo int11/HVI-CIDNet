@@ -58,10 +58,6 @@ class LOLv2SynDatasetFromFolder(LOLDatasetFromFolder):
         super().__init__(data_dir, 'Low', 'Normal', transform)
 
 
-# Alias for backward compatibility
-LOLDatasetFromFolder = LOLv1DatasetFromFolder
-
-
 
 
 
