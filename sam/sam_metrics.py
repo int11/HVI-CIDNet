@@ -52,8 +52,11 @@ def load_cidnet_model(model_path):
     return model
 
 
-def load_sam_model(sam_model_path="Gourieff/ReActor/models/sams/sam_vit_b_01ec64.pth"):
+def load_sam_model(sam_model_path="Gourieff/ReActor/models/sams/sam_vit_b_01ec64.pth", device=None):
     """Hugging Face에서 SAM 모델을 다운로드하고 로드"""
+    if device is None:
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
     # sam_model_path를 repo_id와 filename으로 분리
     parts = sam_model_path.split('/')
     if len(parts) < 3:

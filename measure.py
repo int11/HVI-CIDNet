@@ -1,6 +1,10 @@
 import os
 import torch
 import cv2
+import warnings
+# Filter out the torchvision pretrained parameter deprecation warnings
+warnings.filterwarnings("ignore", message="The parameter 'pretrained' is deprecated")
+warnings.filterwarnings("ignore", message="Arguments other than a weight enum")
 import lpips
 import numpy as np
 from PIL import Image
@@ -60,13 +64,21 @@ def calculate_psnr(target, ref):
     psnr = 10.0 * np.log10(255.0 * 255.0 / (np.mean(np.square(diff)) + 1e-8))
     return psnr
 
+# LPIPS 모델을 전역적으로 한 번만 생성
+_lpips_model = None
+
+def get_lpips_model():
+    global _lpips_model
+    if _lpips_model is None:
+        _lpips_model = lpips.LPIPS(net='alex', verbose=False)
+        _lpips_model.cuda()
+    return _lpips_model
+
 def metrics(im_list, label_list, use_GT_mean):
     avg_psnr = 0
     avg_ssim = 0
     avg_lpips = 0
     n = 0
-    loss_fn = lpips.LPIPS(net='alex', verbose=False)
-    loss_fn.cuda()
     for item, label_item in list(zip(im_list, label_list)):
         n += 1
         
@@ -91,7 +103,7 @@ def metrics(im_list, label_list, use_GT_mean):
         im2 = np.array(im2)
         
         # Use metrics_one function
-        score_psnr, score_ssim, score_lpips = metrics_one(im1, im2, use_GT_mean, loss_fn)
+        score_psnr, score_ssim, score_lpips = metrics_one(im1, im2, use_GT_mean)
     
         avg_psnr += score_psnr
         avg_ssim += score_ssim
@@ -104,7 +116,7 @@ def metrics(im_list, label_list, use_GT_mean):
     avg_lpips = avg_lpips / n
     return avg_psnr, avg_ssim, avg_lpips
 
-def metrics_one(im1, im2, use_GT_mean, loss_fn):
+def metrics_one(im1, im2, use_GT_mean):
     if isinstance(im1, Image.Image):
         im1 = np.array(im1)
     if isinstance(im2, Image.Image):
@@ -120,7 +132,9 @@ def metrics_one(im1, im2, use_GT_mean, loss_fn):
     ex_p0 = lpips.im2tensor(im1).cuda()
     ex_ref = lpips.im2tensor(im2).cuda()
     
-    score_lpips = loss_fn.forward(ex_ref, ex_p0)
+    # LPIPS 모델을 metrics_one에서 직접 가져옴
+    lpips_model = get_lpips_model()
+    score_lpips = lpips_model.forward(ex_ref, ex_p0)
     return score_psnr, score_ssim, score_lpips
 
 

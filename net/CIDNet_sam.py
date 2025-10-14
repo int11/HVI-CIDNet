@@ -18,7 +18,7 @@ class AlphaPredictor(nn.Module):
             nn.GroupNorm(1, in_channels // 2),
             nn.SiLU(inplace=True),
             nn.ReplicationPad2d(1),
-            nn.Conv2d(in_channels // 2, 1, 3, stride=1, padding=0, bias=False),
+            nn.Conv2d(in_channels // 2, 4, 3, stride=1, padding=0, bias=False),  # output 4 channels for alpha_s, alpha_i_r, alpha_i_g, alpha_i_b
             nn.Sigmoid()
         )
         self.max_scale_factor = max_scale_factor  # 최대 스케일 배수 (예: 2.0이면 0.5~2.0 범위)
