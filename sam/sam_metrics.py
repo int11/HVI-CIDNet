@@ -52,49 +52,6 @@ def load_cidnet_model(model_path):
     return model
 
 
-def load_sam_model(sam_model_path="Gourieff/ReActor/models/sams/sam_vit_b_01ec64.pth", device=None):
-    """Hugging Face에서 SAM 모델을 다운로드하고 로드"""
-    if device is None:
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    
-    # sam_model_path를 repo_id와 filename으로 분리
-    parts = sam_model_path.split('/')
-    if len(parts) < 3:
-        raise ValueError("SAM model path should be in format: repo_id/filename (e.g., Gourieff/ReActor/models/sams/sam_vit_b_01ec64.pth)")
-    
-    model_repo = '/'.join(parts[:2])  # "Gourieff/ReActor"
-    model_filename = '/'.join(parts[2:])  # "models/sams/sam_vit_b_01ec64.pth"
-    
-    print(f"Loading SAM model from: {model_repo}/{model_filename}")
-    
-    # Hugging Face Hub에서 SAM checkpoint 다운로드
-    checkpoint_path = hf_hub_download(
-        repo_id=model_repo, 
-        filename=model_filename, 
-        repo_type="dataset"
-    )
-    print(f"SAM model downloaded from: {checkpoint_path}")
-    
-    # SAM 모델 초기화 및 로드
-    sam = sam_model_registry["vit_b"](checkpoint=checkpoint_path)
-    sam = sam.to(device)  # Move SAM model to GPU
-    
-    # Mask generator 생성
-    mask_generator = SamAutomaticMaskGenerator(
-        sam,
-        points_per_side=16,
-        pred_iou_thresh=0.86,
-        stability_score_thresh=0.92,
-        crop_n_layers=0,
-        crop_n_points_downscale_factor=2,
-        min_mask_region_area=200,
-    )
-    return mask_generator
-
-
-
-
-
 def process_image_with_cidnet(model, image, alpha_s, alpha_i):
     input_tensor = transforms.ToTensor()(image)
     # Convert parameters to tensor
